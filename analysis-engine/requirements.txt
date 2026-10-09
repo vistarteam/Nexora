@@ -1,0 +1,9 @@
+# The NEXORA analysis engine intentionally has NO third-party dependencies.
+#
+# It uses only the Python standard library (math, json, dataclasses, http.server)
+# so that it runs anywhere Python 3.10+ is available, without a virtualenv, a
+# lockfile, or a network install. This keeps the analysis path auditable and
+# removes supply-chain risk from the most sensitive part of the system.
+#
+# If optional performance work is ever needed, numpy/pandas could be added here
+# behind the same public interface in `nexora_analysis/__init__.py`.

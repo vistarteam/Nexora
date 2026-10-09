@@ -1,0 +1,263 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   Design tokens
+   --------------------------------------------------------------------------
+   Every colour in the application resolves through these variables. Switching
+   `data-theme` on <html> re-themes the entire UI with no component changes,
+   which is why the theme toggle in Settings is genuinely functional.
+   Values are space-separated RGB channels so Tailwind's `<alpha-value>` works.
+   ========================================================================== */
+
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Surfaces, darkest to lightest */
+  --nx-base: 7 11 18;
+  --nx-base-950: 5 8 13;
+  --nx-base-900: 10 15 24;
+  --nx-base-850: 14 20 32;
+  --nx-base-800: 19 27 42;
+  --nx-base-700: 28 39 56;
+  --nx-base-600: 40 53 74;
+
+  --nx-border: 29 39 55;
+  --nx-border-strong: 44 57 79;
+
+  --nx-ink: 233 238 248;
+  --nx-ink-muted: 143 156 180;
+  --nx-ink-subtle: 100 116 139;
+  --nx-ink-invert: 7 11 18;
+
+  /* Restrained teal accent — a terminal colour, not a marketing colour */
+  --nx-accent: 45 212 191;
+  --nx-accent-soft: 17 74 71;
+  --nx-accent-strong: 110 231 216;
+
+  --nx-bull: 14 203 129;
+  --nx-bear: 246 70 93;
+  --nx-warn: 240 185 11;
+  --nx-info: 96 165 250;
+
+  --nx-chart-grid: 29 39 55;
+  --nx-shadow-pop: 0 18px 40px -18px rgb(0 0 0 / 0.8);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  --nx-base: 241 245 249;
+  --nx-base-950: 255 255 255;
+  --nx-base-900: 248 250 252;
+  --nx-base-850: 255 255 255;
+  --nx-base-800: 241 245 249;
+  --nx-base-700: 226 232 240;
+  --nx-base-600: 203 213 225;
+
+  --nx-border: 219 226 236;
+  --nx-border-strong: 197 208 222;
+
+  --nx-ink: 15 23 42;
+  --nx-ink-muted: 71 85 105;
+  --nx-ink-subtle: 100 116 139;
+  --nx-ink-invert: 255 255 255;
+
+  --nx-accent: 13 148 136;
+  --nx-accent-soft: 204 251 241;
+  --nx-accent-strong: 15 118 110;
+
+  --nx-bull: 5 150 105;
+  --nx-bear: 190 18 60;
+  --nx-warn: 180 83 9;
+  --nx-info: 37 99 235;
+
+  --nx-chart-grid: 226 232 240;
+  --nx-shadow-pop: 0 18px 40px -22px rgb(15 23 42 / 0.35);
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    /* The whole document is RTL; logical Tailwind utilities follow automatically. */
+    direction: rtl;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-base-950 text-ink antialiased;
+    font-family: theme('fontFamily.sans');
+    font-feature-settings: 'ss01';
+    min-height: 100vh;
+    /* Subtle depth: a faint radial glow behind the terminal. */
+    background-image: radial-gradient(
+        120% 90% at 100% 0%,
+        rgb(var(--nx-accent) / 0.07) 0%,
+        transparent 55%
+      ),
+      radial-gradient(90% 70% at 0% 100%, rgb(var(--nx-info) / 0.05) 0%, transparent 50%);
+    background-attachment: fixed;
+  }
+
+  /* Persian text must never be letter-spaced; it breaks the joins. */
+  body,
+  button,
+  input,
+  select,
+  textarea {
+    letter-spacing: 0;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/70 ring-offset-2 ring-offset-base-950;
+  }
+
+  ::selection {
+    background: rgb(var(--nx-accent) / 0.3);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgb(var(--nx-base-900));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--nx-base-600));
+    border-radius: 9999px;
+    border: 2px solid rgb(var(--nx-base-900));
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--nx-border-strong));
+  }
+
+  /* Latin data (tickers, IDs) reads better in a mono face inside RTL text. */
+  .ltr-data {
+    direction: ltr;
+    unicode-bidi: isolate;
+    font-family: theme('fontFamily.mono');
+    font-variant-numeric: tabular-nums;
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ==========================================================================
+   Reusable component classes
+   Keeping these here (rather than repeating long class lists) is what makes the
+   design system consistent across pages.
+   ========================================================================== */
+
+@layer components {
+  .nx-card {
+    @apply rounded-card border border-border bg-base-850/80 shadow-card backdrop-blur-sm;
+  }
+
+  .nx-card-header {
+    @apply flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-5;
+  }
+
+  .nx-card-body {
+    @apply p-4 sm:p-5;
+  }
+
+  .nx-label {
+    @apply mb-1.5 block text-2xs font-medium text-ink-muted;
+  }
+
+  .nx-input {
+    @apply w-full rounded-lg border border-border bg-base-900 px-3 py-2 text-sm text-ink
+      placeholder:text-ink-subtle transition
+      hover:border-border-strong focus:border-accent/60 focus:outline-none
+      focus:ring-2 focus:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-55;
+  }
+
+  .nx-select {
+    @apply nx-input cursor-pointer appearance-none bg-no-repeat ps-3 pe-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238f9cb4' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-position: left 0.65rem center;
+  }
+
+  .nx-btn {
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-lg px-3.5 py-2
+      text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .nx-btn-primary {
+    @apply nx-btn bg-accent text-base-950 hover:bg-accent-strong active:scale-[0.985];
+  }
+
+  .nx-btn-secondary {
+    @apply nx-btn border border-border bg-base-800 text-ink hover:border-border-strong
+      hover:bg-base-700 active:scale-[0.985];
+  }
+
+  .nx-btn-ghost {
+    @apply nx-btn text-ink-muted hover:bg-base-800 hover:text-ink;
+  }
+
+  .nx-btn-danger {
+    @apply nx-btn border border-bear/40 bg-bear/10 text-bear hover:bg-bear/20;
+  }
+
+  .nx-chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-2xs font-medium;
+  }
+
+  .nx-table {
+    @apply w-full border-collapse text-sm;
+  }
+
+  .nx-table thead th {
+    @apply whitespace-nowrap border-b border-border px-3 py-2.5 text-start text-2xs
+      font-medium text-ink-muted;
+  }
+
+  .nx-table tbody td {
+    @apply border-b border-border/70 px-3 py-3 text-start align-middle;
+  }
+
+  .nx-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  .nx-table tbody tr {
+    @apply transition hover:bg-base-800/60;
+  }
+
+  .nx-skeleton {
+    @apply animate-pulse-soft rounded-md bg-base-700/70;
+  }
+
+  /* A thin accent rail used to mark panels that carry a status. */
+  .nx-rail {
+    @apply relative before:absolute before:inset-y-2 before:start-0 before:w-0.5 before:rounded-full before:bg-accent/70;
+  }
+}
+
+/* Tailwind does not ship a scroll-lock helper; used by the mobile drawer. */
+.no-scroll {
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

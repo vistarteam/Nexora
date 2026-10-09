@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fa" dir="rtl" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="نکسورا — پلتفرم تحلیل تکنیکال بازارهای مالی با موتور تحلیل خودکار"
+    />
+    <title>نکسورا | تحلیل تکنیکال هوشمند</title>
+
+    <!--
+      Vazirmatn is the standard open-source Persian UI typeface. It is loaded
+      from a CDN with a local fallback stack (Tahoma/system-ui) declared in
+      tailwind.config.js, so the interface stays readable if the CDN is blocked.
+    -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css"
+    />
+
+    <!-- Immediate theme application to avoid a flash of the wrong palette. -->
+    <script>
+      (function () {
+        try {
+          var raw = window.localStorage.getItem('nexora.settings.v1');
+          var theme = raw ? JSON.parse(raw).theme : null;
+          if (theme === 'light' || theme === 'dark') {
+            document.documentElement.setAttribute('data-theme', theme);
+          }
+        } catch (error) {
+          /* First visit or blocked storage: keep the default dark theme. */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      نکسورا برای اجرا به جاوااسکریپت نیاز دارد. لطفاً جاوااسکریپت را در مرورگر خود فعال کنید.
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

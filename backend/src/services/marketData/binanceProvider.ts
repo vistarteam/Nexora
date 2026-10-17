@@ -1,5 +1,5 @@
 import { config } from '../../config/env.js';
-import type { Candle, CandleSeries, Timeframe } from '../../types/domain.js';
+import type { Candle, CandleSeries, LastCandleStatus, Timeframe } from '../../types/domain.js';
 import { createLogger } from '../../lib/logger.js';
 import {
   assertSupports,
@@ -20,7 +20,7 @@ const log = createLogger('market-data:binance');
  *
  * Note: availability depends on network access from the host running the
  * backend. Failures surface as an explicit `UPSTREAM_UNAVAILABLE` error — the
- * service never silently substitutes demo candles for a failed live request.
+ * service never silently substitutes fabricated candles for a failed request.
  */
 const BINANCE_INTERVALS: Record<Timeframe, string> = {
   '1m': '1m',
@@ -123,6 +123,17 @@ export class BinanceMarketDataProvider implements MarketDataProvider {
       );
     }
 
+    // Binance's REST `/klines` carries no per-kline closed flag, so the
+    // completeness of the newest bar is inferred from the exchange-reported
+    // close time (row index 6) against our own clock — see `newestCandleStatus`.
+    const closeTimeByOpenTime = new Map<number, number>();
+    for (const row of payload as BinanceKline[]) {
+      const openTime = Number(row[0]);
+      // First occurrence wins, matching `sanitizeCandles` deduplication.
+      if (!closeTimeByOpenTime.has(openTime)) closeTimeByOpenTime.set(openTime, Number(row[6]));
+    }
+    const newest = clean[clean.length - 1] as Candle;
+
     return {
       symbol: request.symbol,
       tvSymbol: request.tvSymbol,
@@ -135,6 +146,7 @@ export class BinanceMarketDataProvider implements MarketDataProvider {
         low: Number(candle.low.toFixed(decimals)),
         close: Number(candle.close.toFixed(decimals)),
       })),
+      lastCandleStatus: newestCandleStatus(newest, closeTimeByOpenTime),
       source: { provider: this.id, mode: 'live', fetchedAt: new Date().toISOString() },
     };
   }
@@ -158,11 +170,36 @@ export class BinanceMarketDataProvider implements MarketDataProvider {
   }
 }
 
+/**
+ * Decide what can honestly be said about the newest candle of a Binance reply.
+ *
+ * The REST `/klines` endpoint exposes no per-kline closed flag (only the
+ * websocket stream carries `x`), so closure can only be inferred by comparing
+ * the exchange-reported close time with the *host* clock. Exactly one direction
+ * is safe under clock skew: when the exchange's close time is still ahead of our
+ * own clock, the bar cannot possibly have closed yet, so `forming` is certain.
+ * The converse is not reliable — our clock may lag the exchange — so a bar whose
+ * close time already reads in the past is reported `unknown`, never `closed`.
+ *
+ * The returned status is therefore a conservative hint, not a claim of exact
+ * exchange-time correctness.
+ */
+function newestCandleStatus(
+  newest: Candle,
+  closeTimeByOpenTime: Map<number, number>,
+): LastCandleStatus {
+  const closeTime = closeTimeByOpenTime.get(newest.time);
+  if (closeTime === undefined || !Number.isFinite(closeTime) || closeTime <= 0) {
+    return 'unknown';
+  }
+  return closeTime > Date.now() ? 'forming' : 'unknown';
+}
+
 /** Used when `MARKET_DATA_PROVIDER=none`; every request fails explicitly. */
 export class NullMarketDataProvider implements MarketDataProvider {
   readonly id = 'none';
   readonly label = 'بدون منبع داده';
-  readonly mode = 'demo' as const;
+  readonly mode = 'none' as const;
   readonly supports = [] as const;
 
   async fetchCandles(request: CandleRequest): Promise<CandleSeries> {

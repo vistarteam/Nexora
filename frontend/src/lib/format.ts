@@ -159,7 +159,6 @@ export const ANALYSIS_STATUS_LABELS: Record<AnalysisStatus, string> = {
 
 export const DATA_MODE_LABELS: Record<DataMode, string> = {
   live: 'داده واقعی',
-  demo: 'داده دمو',
   none: 'بدون داده',
 };
 

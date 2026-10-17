@@ -1,17 +1,20 @@
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import { ExportBar } from '../components/analysis/ExportBar';
 import { ReportView } from '../components/analysis/ReportView';
+import { AnalysisChart } from '../components/chart/AnalysisChart';
 import { SelectionBar } from '../components/market/SelectionBar';
-import { Badge, DataModeBadge } from '../components/ui/Badge';
+import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
-import { Card, CardBody } from '../components/ui/Card';
+import { Card, CardBody, CardHeader } from '../components/ui/Card';
 import { EmptyState, ErrorState, Skeleton } from '../components/ui/Feedback';
 import { ChartIcon, RefreshIcon, SparkIcon } from '../components/ui/Icons';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Toggle } from '../components/ui/Field';
 import { useFormat, useSettings } from '../context/SettingsContext';
-import { useSystem } from '../context/SystemContext';
+import { PRINT_REGION_CLASS } from '../lib/reportExport';
 import { useAnalysisRun } from '../lib/hooks/useAnalysisRun';
+import { useLiveTicker } from '../lib/hooks/useLiveTicker';
 import { useDefaultSelection } from '../lib/hooks/useDefaultSelection';
 import { useSelection } from '../lib/hooks/useSelection';
 import { TIMEFRAME_LABELS } from '../lib/format';
@@ -23,20 +26,34 @@ import { TIMEFRAME_LABELS } from '../lib/format';
  * page itself computes nothing: every number on screen came from the analysis
  * engine over candles supplied by the market-data service.
  *
- * Reports are explicitly marked when they are demo-derived, and the report's
- * own `status` decides whether facts are shown at all.
+ * Every report names the venue its candles came from, and the report's own
+ * `status` decides whether facts are shown at all.
+ *
+ * The chart above the report is built from the `chart` payload the same request
+ * returned — same candles, same indicators, same levels. The page therefore shows
+ * one dataset twice (visually and in text) instead of two datasets once each.
  */
 export function AiAnalysisPage(): JSX.Element {
   const defaults = useDefaultSelection();
   const { selection, setSymbol, setAssetClass, setTimeframe } = useSelection(defaults);
   const { settings, update } = useSettings();
-  const { isDemo } = useSystem();
   const format = useFormat();
   const { state, run } = useAnalysisRun();
   const autoRanFor = useRef<string | null>(null);
 
   const effectiveSymbol = selection.symbol ?? defaults.symbol ?? 'BINANCE:BTCUSDT';
   const requestKey = `${effectiveSymbol}|${selection.assetClass}|${selection.timeframe}`;
+
+  // The chart animates the forming candle of whatever instrument is selected,
+  // independently of whether a report has been run yet.
+  const live = useLiveTicker(
+    {
+      symbol: effectiveSymbol,
+      assetClass: selection.assetClass,
+      timeframe: selection.timeframe,
+    },
+    { enabled: state.phase !== 'running' },
+  );
 
   const execute = (save: boolean) => {
     void run({
@@ -73,7 +90,7 @@ export function AiAnalysisPage(): JSX.Element {
         description="اندیکاتورها، سطوح کلیدی، روند و سناریوهای شرطی — با تفکیک صریح میان داده محاسبه‌شده و تفسیر."
         badges={
           <>
-            {isDemo ? <DataModeBadge mode="demo" /> : <Badge tone="bull" dot>داده واقعی</Badge>}
+            <Badge tone="bull" dot>داده واقعی</Badge>
             <Badge tone="neutral">موتور پایتون + جایگزین تایپ‌اسکریپت</Badge>
           </>
         }
@@ -213,13 +230,43 @@ export function AiAnalysisPage(): JSX.Element {
               </Link>
             </div>
 
-            <ReportView report={report} />
+            {/*
+              * Everything worth keeping goes inside the print region: the chart,
+              * the report, and the export controls (which hide themselves when
+              * printing). The PDF is this page printed, so the chart in the file
+              * is the chart on screen.
+              */}
+            <div className={PRINT_REGION_CLASS}>
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
+                <h2 className="text-sm font-semibold text-ink">خروجی گزارش</h2>
+                <ExportBar report={report} chart={state.chart} chartContainerId={CHART_ID} />
+              </div>
+
+              {state.chart ? (
+                <Card className="nx-print-avoid-break">
+                  <CardHeader
+                    title="نمودار تحلیل"
+                    description={`همین ${state.chart.candles.length} کندلی که موتور تحلیل بررسی کرده است؛ میانگین‌ها، سطوح، نقاط چرخش و نوسان‌نماها روی همین نمودار ترسیم شده‌اند.`}
+                  />
+                  <CardBody className="p-0">
+                    <div id={CHART_ID}>
+                      <AnalysisChart chart={state.chart} height={520} live={live} />
+                    </div>
+                  </CardBody>
+                </Card>
+              ) : null}
+
+              <ReportView report={report} />
+            </div>
           </>
         ) : null}
       </div>
     </div>
   );
 }
+
+/** Stable DOM id so the PNG export can find the chart it must capture. */
+const CHART_ID = 'nexora-analysis-chart';
 
 function phaseLabel(phase: string): string {
   switch (phase) {

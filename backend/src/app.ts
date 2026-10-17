@@ -51,7 +51,8 @@ export function createApp(container: Container): Express {
       data: {
         service: SERVICE_NAME,
         version: SERVICE_VERSION,
-        documentation: '/api/health, /api/markets, /api/market-data, /api/analysis, /api/watchlist, /api/history',
+        documentation:
+          '/api/health, /api/markets, /api/market-data, /api/chart, /api/analysis, /api/watchlist, /api/history',
       },
     });
   });

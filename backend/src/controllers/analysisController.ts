@@ -12,6 +12,10 @@ import type { AnalysisBody } from '../validation/schemas.js';
  * the composed report. A successful HTTP response does not imply a successful
  * analysis: `data.report.status` carries `ok`, `insufficient_data` or
  * `unavailable`, and the UI renders each of those distinctly.
+ *
+ * With `includeChart: true` the response also carries `data.chart`, the chart
+ * payload computed from the *same* candles in the *same* engine run, so the
+ * drawn chart and the report cannot disagree about the newest bar.
  */
 export function createAnalysisController(container: Container) {
   return {
@@ -24,26 +28,20 @@ export function createAnalysisController(container: Container) {
         timeframe: body.timeframe,
         ...(body.limit !== undefined ? { limit: body.limit } : {}),
         save: body.save ?? true,
+        includeChart: body.includeChart ?? false,
       });
 
       res.status(201).json(
         success(
           {
             report: outcome.report,
+            chart: outcome.chart,
             saved: outcome.saved,
             durationMs: outcome.durationMs,
           },
           {
-            demo: outcome.demo,
             storage: container.storage.description.driver,
             persistent: container.storage.description.persistent,
-            ...(outcome.demo
-              ? {
-                  notices: [
-                    'این گزارش روی داده دمو تولید شده است؛ داده واقعی بازار پیکربندی نشده است.',
-                  ],
-                }
-              : {}),
           },
         ),
       );

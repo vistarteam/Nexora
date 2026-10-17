@@ -101,7 +101,10 @@ export function SettingsPage(): JSX.Element {
           </CardBody>
         </Card>
 
-        <Card>
+        {/* `relative z-10` keeps the symbol dropdown above the cards below it;
+            `.nx-card`'s backdrop-blur would otherwise create a stacking context
+            that paints the listbox underneath the following card. */}
+        <Card className="relative z-10">
           <CardHeader
             title="مقادیر پیش‌فرض تحلیل"
             description="صفحه‌های تحلیل و نمودار با این مقادیر باز می‌شوند."
@@ -180,10 +183,7 @@ export function SettingsPage(): JSX.Element {
               </div>
               <div>
                 <dt className="text-ink-subtle">منبع داده</dt>
-                <dd className="mt-1 text-ink">
-                  {bootstrap ? bootstrap.marketData.label : '—'}
-                  {bootstrap?.marketData.isDemo ? ' (دمو)' : ''}
-                </dd>
+                <dd className="mt-1 text-ink">{bootstrap ? bootstrap.marketData.label : '—'}</dd>
               </div>
               <div>
                 <dt className="text-ink-subtle">موتور تحلیل</dt>

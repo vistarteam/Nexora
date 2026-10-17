@@ -7,7 +7,7 @@
 
 export type AssetClass = 'crypto' | 'forex' | 'stocks';
 export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | '1w';
-export type DataMode = 'live' | 'demo' | 'none';
+export type DataMode = 'live' | 'none';
 export type AnalysisStatus = 'ok' | 'insufficient_data' | 'unavailable';
 export type EngineId = 'python' | 'typescript-fallback';
 
@@ -36,9 +36,38 @@ export interface CandleSeries {
   tvSymbol: string;
   assetClass: AssetClass;
   timeframe: Timeframe;
-  source: { provider: string; mode: 'live' | 'demo'; fetchedAt: string };
+  source: { provider: string; mode: 'live'; fetchedAt: string };
   candles: Candle[];
   count: number;
+  /**
+   * Evidence-based hint about the newest candle. Mirrors the backend
+   * `LastCandleStatus`; absent when the provider cannot support the inference.
+   */
+  lastCandleStatus?: 'forming' | 'unknown';
+}
+
+/**
+ * A live snapshot of one instrument, polled once a second by a live chart.
+ *
+ * Mirrors the backend `TickerSnapshot`. The forming `candle` and its
+ * `candleCloseTime` come from the same venue the analysis used, so the animated
+ * bar is the very bar the engine last analysed.
+ */
+export interface TickerSnapshot {
+  symbol: string;
+  tvSymbol: string;
+  assetClass: AssetClass;
+  timeframe: Timeframe;
+  price: number | null;
+  candle: Candle | null;
+  candleOpenTime: number | null;
+  candleCloseTime: number | null;
+  candleCloseAt: string | null;
+  secondsToClose: number | null;
+  lastCandleStatus?: 'forming' | 'unknown';
+  dataSource: string;
+  mode: DataMode;
+  fetchedAt: string;
 }
 
 export interface IndicatorSnapshot {
@@ -62,6 +91,8 @@ export interface AnalysisFacts {
   lastCandle: Candle | null;
   candleCount: number;
   changePercent: number | null;
+  /** Whole-series close-to-close return stdev; the trend evidence quotes a
+   *  separate trend-window figure, each clearly labelled in Persian. */
   volatilityPercent: number | null;
   indicators: {
     rsi: IndicatorSnapshot | null;
@@ -128,6 +159,82 @@ export interface AnalysisReport {
   disclaimer: string;
 }
 
+/** One point of a chart line, addressed by the candle's open time (epoch ms). */
+export interface ChartPoint {
+  time: number;
+  value: number;
+}
+
+/** A moving-average line drawn over the candles. */
+export interface ChartOverlay {
+  /** Stable id, e.g. `sma20`. */
+  id: string;
+  kind: 'sma' | 'ema';
+  period: number;
+  points: ChartPoint[];
+}
+
+/**
+ * Everything the price chart draws, computed by the analysis engine from the
+ * exact candles it analysed.
+ *
+ * Because it arrives with the report (or from `/api/chart`, which runs the same
+ * engine), the chart and the text can never describe different data — the chart
+ * shows the engine's own numbers, not a third-party picture of a different venue
+ * and interval.
+ */
+export interface ChartPayload {
+  symbol: string;
+  tvSymbol: string;
+  name: string;
+  assetClass: AssetClass;
+  timeframe: Timeframe;
+  generatedAt: string;
+  mode: DataMode;
+  dataSource: string;
+  lastCandleStatus?: 'forming' | 'unknown';
+  engine: { id: EngineId; name: string; version: string };
+  status: AnalysisStatus;
+  reason: string | null;
+  warnings: string[];
+  candles: Candle[];
+  overlays: ChartOverlay[];
+  indicators: {
+    rsi: {
+      period: number;
+      overbought: number;
+      oversold: number;
+      points: ChartPoint[];
+    } | null;
+    macd: {
+      fast: number;
+      slow: number;
+      signalPeriod: number;
+      macd: ChartPoint[];
+      signal: ChartPoint[];
+      histogram: ChartPoint[];
+    } | null;
+    atr: { period: number; points: ChartPoint[] } | null;
+  };
+  levels: {
+    supports: SupportResistanceLevel[];
+    resistances: SupportResistanceLevel[];
+    nearestSupport: SupportResistanceLevel | null;
+    nearestResistance: SupportResistanceLevel | null;
+  } | null;
+  swings: { highs: ChartPoint[]; lows: ChartPoint[] } | null;
+  trend: {
+    direction: string;
+    strength: number | null;
+    regression: { from: ChartPoint; to: ChartPoint } | null;
+  } | null;
+}
+
+/** A line the user drew on the chart, persisted per symbol and timeframe. */
+export type ChartDrawing =
+  | { id: string; kind: 'hline'; price: number }
+  | { id: string; kind: 'trend'; from: ChartPoint; to: ChartPoint };
+
 export interface AnalysisSummary {
   id: string;
   symbol: string;
@@ -154,7 +261,6 @@ export interface WatchlistItem {
 /** Metadata envelope attached to every API response. */
 export interface ApiMeta {
   generatedAt: string;
-  demo: boolean;
   persistent?: boolean;
   storage?: string;
   notices?: string[];
@@ -201,9 +307,8 @@ export interface BootstrapPayload {
   marketData: {
     provider: string;
     label: string;
-    mode: 'live' | 'demo';
+    mode: DataMode;
     supports: AssetClass[];
-    isDemo: boolean;
   };
   analysis: {
     engine: string;

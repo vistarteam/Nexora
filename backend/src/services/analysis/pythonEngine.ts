@@ -3,7 +3,7 @@ import path from 'node:path';
 import { config } from '../../config/env.js';
 import { createLogger } from '../../lib/logger.js';
 import type { AnalysisStatus } from '../../types/domain.js';
-import type { EngineOptions, EngineRunResult } from './types.js';
+import type { EngineOptions, EngineRunResult, EngineSeries } from './types.js';
 
 const log = createLogger('analysis:python');
 
@@ -62,6 +62,11 @@ function coerceResult(parsed: unknown): EngineRunResult {
   const warnings = Array.isArray(parsed.warnings)
     ? parsed.warnings.filter((warning): warning is string => typeof warning === 'string')
     : [];
+  // The series block is optional in the engine contract (the engine only emits it
+  // when asked), so a missing block is `null`, not an error. A *present* block is
+  // passed through as-is and validated where it is consumed, so one malformed
+  // array cannot silently be replaced by a plausible-looking empty chart.
+  const series = isRecord(parsed.series) ? (parsed.series as unknown as EngineSeries) : null;
 
   return {
     engine: {
@@ -81,6 +86,7 @@ function coerceResult(parsed: unknown): EngineRunResult {
       ? (parsed.interpretation as unknown as EngineRunResult['interpretation'])
       : null,
     scenarios: scenarios as EngineRunResult['scenarios'],
+    series,
     warnings,
     reason: typeof parsed.reason === 'string' ? parsed.reason : null,
   };

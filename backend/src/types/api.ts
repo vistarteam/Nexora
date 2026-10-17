@@ -4,8 +4,6 @@ import type { DataMode } from './domain.js';
 export interface ApiMeta {
   /** ISO timestamp of when the response was produced. */
   generatedAt: string;
-  /** True when any part of the payload is derived from synthetic demo data. */
-  demo: boolean;
   /** Present when the endpoint depends on storage: false means not durable. */
   persistent?: boolean;
   /** Storage driver actually in use, e.g. `json` | `memory`. */

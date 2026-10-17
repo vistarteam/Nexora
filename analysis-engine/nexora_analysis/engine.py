@@ -6,7 +6,10 @@ payload of candles plus options and returns a structured result that separates
 * **facts** — numbers computed from the supplied candles,
 * **interpretation** — prose derived from those numbers, clearly labelled as an
   interpretation, and
-* **scenarios** — conditional, hypothetical setups with explicit invalidation.
+* **scenarios** — conditional, hypothetical setups with explicit invalidation, and
+* **series** — index-aligned indicator arrays, returned only when
+  ``options.includeSeries`` is set, so a chart can draw the same numbers this
+  engine reports instead of recomputing them.
 
 The engine never invents candles. If it is not given usable data it returns
 ``status="insufficient_data"`` or ``status="unavailable"`` with an explanation,
@@ -15,15 +18,16 @@ and no analytical conclusions at all.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable, Optional
 
 from .indicators import atr, ema, macd, percent_change, rsi, sma, stdev
-from .levels import detect_levels
-from .trend import classify_trend
+from .levels import detect_levels, find_swings
+from .trend import classify_trend, regression_line
 
 ENGINE_ID = "python"
 ENGINE_NAME = "nexora-analysis-engine"
-ENGINE_VERSION = "0.2.0"
+ENGINE_VERSION = "0.3.0"
 
 DEFAULT_OPTIONS: dict[str, Any] = {
     "rsiPeriod": 14,
@@ -35,10 +39,21 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "atrPeriod": 14,
     "swingLookback": 5,
     "maxLevels": 5,
+    # Off by default: `series` is a chart-rendering payload (every indicator value
+    # for every candle), so a caller that only wants the report does not pay for
+    # it. Reports never store it; the chart endpoint asks for it explicitly.
+    "includeSeries": False,
 }
 
 # Absolute floor: below this we cannot even report a meaningful change.
 MINIMUM_CANDLES = 5
+
+#: Decimal places for the chart series payload. Prices are quoted far coarser
+#: than this by every provider; the extra digits only exist so a chart curve is
+#: visually identical to the value `facts` reports for the same bar.
+SERIES_DECIMALS = 6
+#: RSI is bounded 0-100, so two decimals are all a chart or a tooltip can use.
+RSI_DECIMALS = 2
 
 
 class EngineInputError(ValueError):
@@ -66,6 +81,10 @@ def _coerce_options(raw: Any) -> dict[str, Any]:
             if periods:
                 options[key] = periods[:5]
 
+    include_series = raw.get("includeSeries")
+    if isinstance(include_series, bool):
+        options["includeSeries"] = include_series
+
     if options["macdFast"] >= options["macdSlow"]:
         options["macdFast"], options["macdSlow"] = DEFAULT_OPTIONS["macdFast"], DEFAULT_OPTIONS["macdSlow"]
 
@@ -84,12 +103,50 @@ def required_candle_count(options: dict[str, Any]) -> int:
     return max(slow + signal, longest_ma) + 5
 
 
+# Candle-open-time window, in epoch milliseconds. This mirrors the TypeScript
+# gateway in backend/src/services/marketData/types.ts (``sanitizeCandles``) and
+# the reference port in backend/src/services/analysis/reference/index.ts, so a
+# candle series cannot be interpreted differently on opposite sides of the
+# Node/Python boundary. The window spans 2001-09-09 to ~2286: it accepts every
+# realistic candle while rejecting the same instant expressed in seconds
+# (~1.7e9), microseconds (~1.7e15) or nanoseconds (~1.7e18).
+MIN_EPOCH_MS = 1e12
+MAX_EPOCH_MS = 1e13
+
+
+def _is_usable_candle(candle: dict[str, float]) -> bool:
+    """Per-row validity check shared with the TypeScript gateway.
+
+    Rows whose high/low do not bracket open/close are rejected rather than
+    repaired: a real exchange bar cannot have that shape, and silently rewriting
+    it would feed the indicators data that never actually traded.
+    """
+    if not all(math.isfinite(candle[key]) for key in ("time", "open", "high", "low", "close")):
+        return False
+    if candle["time"] < MIN_EPOCH_MS or candle["time"] >= MAX_EPOCH_MS:
+        return False
+    if min(candle["open"], candle["high"], candle["low"], candle["close"]) <= 0:
+        return False
+    return (
+        candle["high"] >= candle["low"]
+        and candle["high"] >= candle["open"]
+        and candle["high"] >= candle["close"]
+        and candle["low"] <= candle["open"]
+        and candle["low"] <= candle["close"]
+    )
+
+
 def decode_candles(raw: Any) -> tuple[list[dict[str, float]], list[str]]:
     """Validate and normalise raw candle dictionaries.
 
     Returns the usable candles (ascending by time) plus warnings describing any
     entries that were skipped. Malformed *shape* raises; malformed *values* are
     skipped so one bad bar does not destroy an otherwise usable series.
+
+    The row-level rules are intentionally identical to the TypeScript gateway
+    (``sanitizeCandles``): same epoch-millisecond window, same OHLC bracketing
+    requirement, same first-wins duplicate handling, same lenient volume — so
+    whichever side processes a series, the result is the same.
     """
     if not isinstance(raw, list):
         raise EngineInputError("`candles` must be a list of OHLCV objects")
@@ -109,21 +166,23 @@ def decode_candles(raw: Any) -> tuple[list[dict[str, float]], list[str]]:
                 "high": float(entry["high"]),
                 "low": float(entry["low"]),
                 "close": float(entry["close"]),
-                "volume": float(entry.get("volume") or 0.0),
             }
         except (KeyError, TypeError, ValueError):
             skipped += 1
             continue
 
-        if candle["close"] <= 0 or candle["open"] <= 0:
+        try:
+            volume = float(entry.get("volume") or 0.0)
+        except (TypeError, ValueError):
+            volume = 0.0
+        # Volume is lenient, as on the gateway: a missing, unparseable or
+        # negative volume is zero rather than a reason to drop an otherwise
+        # valid bar.
+        candle["volume"] = volume if (math.isfinite(volume) and volume >= 0) else 0.0
+
+        if not _is_usable_candle(candle):
             skipped += 1
             continue
-        if candle["high"] < candle["low"]:
-            # Swap instead of discarding: the bar is repairable.
-            candle["high"], candle["low"] = candle["low"], candle["high"]
-            warnings.append("کندلی با سقف کوچک‌تر از کف اصلاح شد.")
-        candle["high"] = max(candle["high"], candle["open"], candle["close"], candle["low"])
-        candle["low"] = min(candle["low"], candle["open"], candle["close"], candle["high"])
         usable.append(candle)
 
     if skipped:
@@ -131,13 +190,14 @@ def decode_candles(raw: Any) -> tuple[list[dict[str, float]], list[str]]:
 
     usable.sort(key=lambda item: item["time"])
 
-    # Drop duplicate timestamps, keeping the last occurrence.
+    # Collapse duplicate open times, keeping the *first* occurrence (as the
+    # gateway does) so each step is a strictly positive interval for the slope
+    # and swing logic.
     deduped: list[dict[str, float]] = []
     for candle in usable:
         if deduped and deduped[-1]["time"] == candle["time"]:
-            deduped[-1] = candle
-        else:
-            deduped.append(candle)
+            continue
+        deduped.append(candle)
     if len(deduped) != len(usable):
         warnings.append(f"{len(usable) - len(deduped)} کندل با زمان تکراری حذف شد.")
 
@@ -274,6 +334,68 @@ def _build_facts(
     }
 
 
+def _rounded(values: Iterable[Optional[float]], decimals: int = SERIES_DECIMALS) -> list[Optional[float]]:
+    """Round an aligned indicator series, preserving its ``None`` warm-up gaps."""
+    return [None if value is None else round(float(value), decimals) for value in values]
+
+
+def _build_series(candles: list[dict[str, float]], options: dict[str, Any]) -> dict[str, Any]:
+    """Every indicator value for every bar, aligned to the candle index.
+
+    This is the payload a chart needs and nothing more. Two properties matter:
+
+    * **Alignment** — each array has exactly ``len(candles)`` entries, so entry
+      ``i`` belongs to ``candles[i]`` and the client never has to guess where an
+      indicator starts,
+    * **Agreement** — the last defined value of each array is the same number
+      ``facts.indicators`` reports, because both come from these functions. A
+      chart drawn from this block therefore cannot contradict the text report.
+
+    The numbers are rounded only for transport; the rounding is stated here so it
+    is not mistaken for precision that was never computed.
+    """
+    closes = [candle["close"] for candle in candles]
+    highs = [candle["high"] for candle in candles]
+    lows = [candle["low"] for candle in candles]
+
+    macd_line, signal_line, histogram = macd(
+        closes, int(options["macdFast"]), int(options["macdSlow"]), int(options["macdSignal"])
+    )
+    swing_highs, swing_lows = find_swings(highs, lows, int(options["swingLookback"]))
+    regression = regression_line(closes)
+
+    return {
+        "count": len(candles),
+        "sma": {str(period): _rounded(sma(closes, int(period))) for period in options["smaPeriods"]},
+        "ema": {str(period): _rounded(ema(closes, int(period))) for period in options["emaPeriods"]},
+        "rsi": _rounded(rsi(closes, int(options["rsiPeriod"])), RSI_DECIMALS),
+        "macd": {
+            "macd": _rounded(macd_line),
+            "signal": _rounded(signal_line),
+            "histogram": _rounded(histogram),
+        },
+        "atr": _rounded(atr(highs, lows, closes, int(options["atrPeriod"]))),
+        "swings": {
+            "highs": [
+                {"index": int(index), "price": round(float(price), SERIES_DECIMALS)}
+                for index, price in swing_highs
+            ],
+            "lows": [
+                {"index": int(index), "price": round(float(price), SERIES_DECIMALS)}
+                for index, price in swing_lows
+            ],
+        },
+        "regression": None
+        if regression is None
+        else {
+            "slope": round(float(regression["slope"]), 10),
+            "intercept": round(float(regression["intercept"]), 10),
+            "window": int(regression["window"]),
+            "startIndex": int(regression["startIndex"]),
+        },
+    }
+
+
 _TREND_LABELS = {
     "uptrend": "صعودی",
     "downtrend": "نزولی",
@@ -336,16 +458,24 @@ def _build_interpretation(facts: dict[str, Any], symbol: str, timeframe: str) ->
         momentum_reading = "RSI در ناحیه میانی است و مومنتوم قاطعانه‌ای نشان نمی‌دهد."
 
     volatility = facts.get("volatilityPercent")
+    candle_count = facts.get("candleCount")
     if volatility is None:
         volatility_reading = "نوسان قابل اندازه‌گیری نبود."
     elif volatility > 3:
         volatility_reading = (
-            f"نوسان محاسبه‌شده {volatility} درصد است؛ در چنین شرایطی حد ضرر باید بازتر و حجم کوچک‌تر باشد."
+            f"نوسان بازده‌ها (انحراف معیار ساده روی کل {candle_count} کندل) برابر "
+            f"{volatility} درصد است؛ در چنین شرایطی حد ضرر باید بازتر و حجم کوچک‌تر باشد."
         )
     elif volatility < 0.8:
-        volatility_reading = f"نوسان محاسبه‌شده {volatility} درصد است؛ بازار کم‌نوسان است."
+        volatility_reading = (
+            f"نوسان بازده‌ها (انحراف معیار ساده روی کل {candle_count} کندل) برابر "
+            f"{volatility} درصد است؛ بازار کم‌نوسان است."
+        )
     else:
-        volatility_reading = f"نوسان محاسبه‌شده {volatility} درصد در محدوده متعارف این تایم‌فریم است."
+        volatility_reading = (
+            f"نوسان بازده‌ها (انحراف معیار ساده روی کل {candle_count} کندل) برابر "
+            f"{volatility} درصد در محدوده متعارف این تایم‌فریم است."
+        )
 
     caveats = [
         "تمام اعداد این بخش از کندل‌های ورودی محاسبه شده‌اند و به کیفیت همان داده وابسته‌اند.",
@@ -466,6 +596,7 @@ def analyze(payload: Any) -> dict[str, Any]:
                 "facts": None,
                 "interpretation": None,
                 "scenarios": [],
+                "series": None,
                 "reason": (
                     f"برای تحلیل حداقل {MINIMUM_CANDLES} کندل معتبر لازم است "
                     f"اما فقط {len(candles)} کندل قابل استفاده دریافت شد."
@@ -481,6 +612,7 @@ def analyze(payload: Any) -> dict[str, Any]:
                 "facts": None,
                 "interpretation": None,
                 "scenarios": [],
+                "series": None,
                 "reason": (
                     f"این مجموعه اندیکاتورها به {required} کندل نیاز دارد "
                     f"اما فقط {len(candles)} کندل دریافت شد. نتیجه‌ای تولید نشد."
@@ -500,6 +632,7 @@ def analyze(payload: Any) -> dict[str, Any]:
             "facts": facts,
             "interpretation": interpretation,
             "scenarios": _build_scenarios(facts),
+            "series": _build_series(candles, options) if options.get("includeSeries") else None,
             "reason": None,
         }
     )

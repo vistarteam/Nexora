@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
-import { ANALYSIS_STATUS_LABELS, DATA_MODE_LABELS } from '../../lib/format';
-import type { AnalysisStatus, DataMode } from '../../types/nexora';
+import { ANALYSIS_STATUS_LABELS } from '../../lib/format';
+import type { AnalysisStatus } from '../../types/nexora';
 
 export type BadgeTone = 'neutral' | 'accent' | 'bull' | 'bear' | 'warn' | 'info' | 'danger';
 
@@ -31,31 +31,6 @@ export function Badge({ children, tone = 'neutral', className, dot = false, titl
       {children}
     </span>
   );
-}
-
-/**
- * The DEMO marker.
- *
- * Every surface that can display synthetic data must show this. Making it a
- * component (rather than an ad-hoc span) means the wording and treatment stay
- * identical everywhere and are impossible to forget silently.
- */
-export function DemoBadge({ label = 'دمو' }: { label?: string }): JSX.Element {
-  return (
-    <Badge
-      tone="warn"
-      dot
-      title="داده‌های این بخش ساختگی و تولیدی هستند و قیمت واقعی بازار نیستند."
-    >
-      {label}
-    </Badge>
-  );
-}
-
-export function DataModeBadge({ mode }: { mode: DataMode }): JSX.Element {
-  if (mode === 'demo') return <DemoBadge />;
-  if (mode === 'live') return <Badge tone="bull" dot>{DATA_MODE_LABELS.live}</Badge>;
-  return <Badge tone="neutral">{DATA_MODE_LABELS.none}</Badge>;
 }
 
 const STATUS_TONES: Record<AnalysisStatus, BadgeTone> = {

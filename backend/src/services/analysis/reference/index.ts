@@ -16,20 +16,72 @@ import type {
   SupportResistanceLevel,
 } from '../../../types/domain.js';
 import { atr, ema, lastValue, macd, percentChange, rsi, sma, stdev } from './indicators.js';
-import { detectLevels } from './levels.js';
-import { classifyTrend } from './trend.js';
+import { detectLevels, findSwings } from './levels.js';
+import { classifyTrend, regressionLine, type TrendReading } from './trend.js';
 import {
   DEFAULT_ENGINE_OPTIONS,
   EngineInputError,
   type EngineOptions,
   type EngineRunResult,
+  type EngineSeries,
 } from '../types.js';
 
 export const REFERENCE_ENGINE_ID = 'typescript-fallback' as const;
+
 export const REFERENCE_ENGINE_NAME = 'nexora-analysis-reference';
-export const REFERENCE_ENGINE_VERSION = '0.2.0';
+export const REFERENCE_ENGINE_VERSION = '0.3.0';
 
 const MINIMUM_CANDLES = 5;
+
+/**
+ * Decimal places for the chart series payload. Kept identical to
+ * `SERIES_DECIMALS` / `RSI_DECIMALS` in the Python engine so both engines emit
+ * byte-identical series for the same candles.
+ */
+const SERIES_DECIMALS = 6;
+const RSI_DECIMALS = 2;
+
+/**
+ * Candle-open-time window, in epoch milliseconds. Identical to the gateway in
+ * `src/services/marketData/types.ts` (`sanitizeCandles`) and to
+ * `decode_candles` in Python, so a series cannot be interpreted differently on
+ * opposite sides of the Node/Python boundary. The window spans 2001-09-09 to
+ * ~2286: it accepts every realistic candle while rejecting the same instant
+ * expressed in seconds (~1.7e9), microseconds (~1.7e15) or nanoseconds (~1.7e18).
+ */
+const MIN_EPOCH_MS = 1e12;
+const MAX_EPOCH_MS = 1e13;
+
+/**
+ * Per-row validity check shared with `sanitizeCandles` and the Python engine.
+ * Rows whose high/low do not bracket open/close are *dropped*, not repaired:
+ * a real exchange bar cannot have that shape, and silently rewriting it would
+ * feed the indicators data that never traded.
+ */
+function isUsableCandle(candle: {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}): boolean {
+  if (![candle.time, candle.open, candle.high, candle.low, candle.close].every(Number.isFinite)) {
+    return false;
+  }
+  if (candle.time < MIN_EPOCH_MS || candle.time >= MAX_EPOCH_MS) {
+    return false;
+  }
+  if (Math.min(candle.open, candle.high, candle.low, candle.close) <= 0) {
+    return false;
+  }
+  return (
+    candle.high >= candle.low &&
+    candle.high >= candle.open &&
+    candle.high >= candle.close &&
+    candle.low <= candle.open &&
+    candle.low <= candle.close
+  );
+}
 
 /** How the API describes the fallback implementation. */
 export function describeReferenceEngine(): { id: 'typescript-fallback'; name: string; version: string } {
@@ -43,7 +95,12 @@ export interface DecodedCandles {
 
 /**
  * Validate and normalise raw candles. Malformed *values* are skipped with a
- * warning; a malformed *shape* raises. Mirrors `decode_candles` in Python.
+ * warning; a malformed *shape* raises.
+ *
+ * This is a faithful port of `decode_candles` in
+ * `analysis-engine/nexora_analysis/engine.py`, and the row-level rules are the
+ * same ones the gateway applies in `src/services/marketData/types.ts`
+ * (`sanitizeCandles`): whichever path a series takes, the result is the same.
  */
 export function decodeCandles(raw: unknown): DecodedCandles {
   if (!Array.isArray(raw)) {
@@ -65,39 +122,31 @@ export function decodeCandles(raw: unknown): DecodedCandles {
     const high = Number(record.high);
     const low = Number(record.low);
     const close = Number(record.close);
-    const volume = record.volume === undefined || record.volume === null ? 0 : Number(record.volume);
+    // Volume is lenient, as on the gateway: a missing or unparseable volume is
+    // zero rather than a reason to drop an otherwise valid bar.
+    const rawVolume = record.volume === undefined || record.volume === null ? 0 : Number(record.volume);
+    const volume = Number.isFinite(rawVolume) ? Math.max(rawVolume, 0) : 0;
 
-    if (![time, open, high, low, close, volume].every((value) => Number.isFinite(value))) {
+    if (!isUsableCandle({ time, open, high, low, close })) {
       skipped += 1;
       continue;
     }
-    if (open <= 0 || close <= 0) {
-      skipped += 1;
-      continue;
-    }
 
-    let repairedHigh = high;
-    let repairedLow = low;
-    if (repairedHigh < repairedLow) {
-      [repairedHigh, repairedLow] = [repairedLow, repairedHigh];
-      warnings.push('کندلی با سقف کوچک‌تر از کف اصلاح شد.');
-    }
-    repairedHigh = Math.max(repairedHigh, open, close, repairedLow);
-    repairedLow = Math.min(repairedLow, open, close, repairedHigh);
-
-    usable.push({ time, open, high: repairedHigh, low: repairedLow, close, volume });
+    usable.push({ time, open, high, low, close, volume });
   }
 
   if (skipped > 0) warnings.push(`${skipped} کندل نامعتبر نادیده گرفته شد.`);
   usable.sort((a, b) => a.time - b.time);
 
+  // Collapse duplicate open times, keeping the *first* occurrence (as the
+  // gateway does) so every step between consecutive bars is a strictly
+  // positive interval for the slope and swing logic.
   const deduped: Candle[] = [];
   for (const candle of usable) {
     if (deduped.length > 0 && (deduped[deduped.length - 1] as Candle).time === candle.time) {
-      deduped[deduped.length - 1] = candle;
-    } else {
-      deduped.push(candle);
+      continue;
     }
+    deduped.push(candle);
   }
   if (deduped.length !== usable.length) {
     warnings.push(`${usable.length - deduped.length} کندل با زمان تکراری حذف شد.`);
@@ -236,6 +285,74 @@ function buildFacts(candles: Candle[], options: EngineOptions): AnalysisFacts {
   };
 }
 
+function roundTo(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+/** Round an aligned indicator series, preserving its `null` warm-up gaps. */
+function rounded(values: Array<number | null>, decimals = SERIES_DECIMALS): Array<number | null> {
+  return values.map((value) => (value === null ? null : roundTo(value, decimals)));
+}
+
+/**
+ * Every indicator value for every bar, aligned to the candle index.
+ *
+ * Mirror of `_build_series` in the Python engine: same arrays, same alignment
+ * and the same rounding, so a chart looks identical whichever engine ran. See
+ * `EngineSeries` for the contract.
+ */
+function buildSeries(candles: Candle[], options: EngineOptions): EngineSeries {
+  const closes = candles.map((candle) => candle.close);
+  const highs = candles.map((candle) => candle.high);
+  const lows = candles.map((candle) => candle.low);
+
+  const macdSeries = macd(closes, options.macdFast, options.macdSlow, options.macdSignal);
+  const { swingHighs, swingLows } = findSwings(highs, lows, options.swingLookback);
+  const regression = regressionLine(closes);
+
+  const smaSeries: Record<string, Array<number | null>> = {};
+  for (const period of options.smaPeriods) {
+    smaSeries[String(period)] = rounded(sma(closes, period));
+  }
+  const emaSeries: Record<string, Array<number | null>> = {};
+  for (const period of options.emaPeriods) {
+    emaSeries[String(period)] = rounded(ema(closes, period));
+  }
+
+  return {
+    count: candles.length,
+    sma: smaSeries,
+    ema: emaSeries,
+    rsi: rounded(rsi(closes, options.rsiPeriod), RSI_DECIMALS),
+    macd: {
+      macd: rounded(macdSeries.macd),
+      signal: rounded(macdSeries.signal),
+      histogram: rounded(macdSeries.histogram),
+    },
+    atr: rounded(atr(highs, lows, closes, options.atrPeriod)),
+    swings: {
+      highs: swingHighs.map((point) => ({
+        index: point.index,
+        price: roundTo(point.price, SERIES_DECIMALS),
+      })),
+      lows: swingLows.map((point) => ({
+        index: point.index,
+        price: roundTo(point.price, SERIES_DECIMALS),
+      })),
+    },
+    regression:
+      regression === null
+        ? null
+        : {
+            slope: roundTo(regression.slope, 10),
+            intercept: roundTo(regression.intercept, 10),
+            window: regression.window,
+            startIndex: regression.startIndex,
+          },
+  };
+}
+
 const TREND_LABELS: Record<string, string> = {
   uptrend: 'صعودی',
   downtrend: 'نزولی',
@@ -296,15 +413,22 @@ function buildInterpretation(
   }
 
   const volatility = facts.volatilityPercent;
+  const candleCount = facts.candleCount;
   let volatilityReading: string;
   if (volatility === null) {
     volatilityReading = 'نوسان قابل اندازه‌گیری نبود.';
   } else if (volatility > 3) {
-    volatilityReading = `نوسان محاسبه‌شده ${volatility} درصد است؛ در چنین شرایطی حد ضرر باید بازتر و حجم کوچک‌تر باشد.`;
+    volatilityReading =
+      `نوسان بازده‌ها (انحراف معیار ساده روی کل ${candleCount} کندل) برابر ${volatility} درصد است؛ ` +
+      'در چنین شرایطی حد ضرر باید بازتر و حجم کوچک‌تر باشد.';
   } else if (volatility < 0.8) {
-    volatilityReading = `نوسان محاسبه‌شده ${volatility} درصد است؛ بازار کم‌نوسان است.`;
+    volatilityReading =
+      `نوسان بازده‌ها (انحراف معیار ساده روی کل ${candleCount} کندل) برابر ${volatility} درصد است؛ ` +
+      'بازار کم‌نوسان است.';
   } else {
-    volatilityReading = `نوسان محاسبه‌شده ${volatility} درصد در محدوده متعارف این تایم‌فریم است.`;
+    volatilityReading =
+      `نوسان بازده‌ها (انحراف معیار ساده روی کل ${candleCount} کندل) برابر ${volatility} درصد در ` +
+      'محدوده متعارف این تایم‌فریم است.';
   }
 
   const caveats = [
@@ -403,6 +527,7 @@ export function analyzeCandles(
       facts: null,
       interpretation: null,
       scenarios: [],
+      series: null,
       reason:
         `برای تحلیل حداقل ${MINIMUM_CANDLES} کندل معتبر لازم است اما فقط ` +
         `${candles.length} کندل قابل استفاده دریافت شد.`,
@@ -416,6 +541,7 @@ export function analyzeCandles(
       facts: null,
       interpretation: null,
       scenarios: [],
+      series: null,
       reason:
         `این مجموعه اندیکاتورها به ${required} کندل نیاز دارد اما فقط ${candles.length} کندل دریافت شد. ` +
         'نتیجه‌ای تولید نشد.',
@@ -425,7 +551,7 @@ export function analyzeCandles(
   const closes = candles.map((candle) => candle.close);
   const highs = candles.map((candle) => candle.high);
   const lows = candles.map((candle) => candle.low);
-  const trend = classifyTrend(highs, lows, closes, options.swingLookback);
+  const trend: TrendReading = classifyTrend(highs, lows, closes, options.swingLookback);
   const facts = buildFacts(candles, options);
 
   return {
@@ -439,6 +565,7 @@ export function analyzeCandles(
       trend.slopePercentPerCandle,
     ),
     scenarios: buildScenarios(facts),
+    series: options.includeSeries ? buildSeries(candles, options) : null,
     reason: null,
   };
 }

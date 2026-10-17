@@ -33,6 +33,22 @@ function makeCandles(count: number, drift = 0, amplitude = 0): Candle[] {
   return candles;
 }
 
+/** A realistic epoch-millisecond open time; the decoder accepts only this unit. */
+const T0 = 1_700_000_000_000;
+
+/** A well-formed candle at `T0 + index` hours, with fields overridden. */
+function candle(index: number, overrides: Partial<Candle> = {}): Candle {
+  return {
+    time: T0 + index * 3_600_000,
+    open: 1,
+    high: 2,
+    low: 0.5,
+    close: 1.5,
+    volume: 1,
+    ...overrides,
+  };
+}
+
 describe('reference indicators', () => {
   it('computes a simple moving average with the expected warm-up', () => {
     expect(sma([1, 2, 3, 4, 5], 3)).toEqual([null, null, 2, 3, 4]);
@@ -92,31 +108,68 @@ describe('decodeCandles', () => {
 
   it('skips malformed entries and warns about them', () => {
     const { candles, warnings } = decodeCandles([
-      { time: 1, open: 1, high: 2, low: 0.5, close: 1.5, volume: 1 },
-      { time: 2, open: 'x', high: 2, low: 1, close: 1.5, volume: 1 },
+      candle(0),
+      { ...candle(1), open: 'x' },
       'junk',
-      { time: 3, open: 1.5, high: 2, low: 1, close: 1.8, volume: 1 },
+      candle(2),
     ]);
     expect(candles).toHaveLength(2);
     expect(warnings.join(' ')).toContain('نادیده');
   });
 
-  it('drops duplicate timestamps keeping the newest value', () => {
-    const { candles, warnings } = decodeCandles([
-      { time: 1, open: 1, high: 2, low: 0.5, close: 1.5, volume: 1 },
-      { time: 1, open: 1, high: 3, low: 0.5, close: 2.5, volume: 1 },
-    ]);
+  it('keeps the first occurrence of a duplicate timestamp', () => {
+    const { candles, warnings } = decodeCandles([candle(0), { ...candle(0), high: 3, close: 2.5 }]);
     expect(candles).toHaveLength(1);
-    expect(candles[0]!.close).toBe(2.5);
+    expect(candles[0]!.close).toBe(1.5);
     expect(warnings.join(' ')).toContain('تکراری');
   });
 
-  it('sorts ascending by time', () => {
-    const { candles } = decodeCandles([
-      { time: 9, open: 1, high: 2, low: 1, close: 1.5, volume: 1 },
-      { time: 2, open: 1, high: 2, low: 1, close: 1.5, volume: 1 },
+  it('drops candles whose high/low do not bracket open/close instead of repairing them', () => {
+    const { candles, warnings } = decodeCandles([candle(0, { open: 5, high: 2, low: 9, close: 6 })]);
+    expect(candles).toHaveLength(0);
+    expect(warnings.join(' ')).toContain('نادیده');
+  });
+
+  it('drops a candle whose high is below its close', () => {
+    const { candles, warnings } = decodeCandles([candle(0, { high: 1.2 })]);
+    expect(candles).toHaveLength(0);
+    expect(warnings.join(' ')).toContain('نادیده');
+  });
+
+  it('rejects timestamps in the wrong unit', () => {
+    const { candles, warnings } = decodeCandles([
+      candle(0, { time: 1_700_000_000 }),
+      candle(1, { time: 1_700_000_000_000_000 }),
+      candle(2, { time: 1_700_000_000_000_000_000 }),
     ]);
-    expect(candles.map((candle) => candle.time)).toEqual([2, 9]);
+    expect(candles).toHaveLength(0);
+    expect(warnings.join(' ')).toContain('نادیده');
+  });
+
+  it('drops non-finite prices', () => {
+    const { candles, warnings } = decodeCandles([
+      candle(0, { high: Number.NaN }),
+      candle(1, { low: Number.POSITIVE_INFINITY }),
+    ]);
+    expect(candles).toHaveLength(0);
+    expect(warnings.join(' ')).toContain('نادیده');
+  });
+
+  it('clamps a negative volume to zero', () => {
+    const { candles } = decodeCandles([candle(0, { volume: -5 })]);
+    expect(candles).toHaveLength(1);
+    expect(candles[0]!.volume).toBe(0);
+  });
+
+  it('defaults volume to zero when it is missing or unparseable', () => {
+    const { candles } = decodeCandles([candle(0), { ...candle(1), volume: 'not-a-number' }]);
+    expect(candles).toHaveLength(2);
+    expect(candles.map((entry) => entry.volume)).toEqual([1, 0]);
+  });
+
+  it('sorts ascending by time', () => {
+    const { candles } = decodeCandles([candle(3), candle(1)]);
+    expect(candles.map((entry) => entry.time)).toEqual([T0 + 3_600_000, T0 + 10_800_000]);
   });
 });
 
@@ -144,6 +197,37 @@ describe('analyzeCandles', () => {
     expect(result.facts?.indicators.rsi).not.toBeNull();
     expect(result.interpretation?.summary).toBeTruthy();
     expect(result.scenarios.length).toBeGreaterThan(0);
+  });
+
+  it('orders levels by real distance, nearest first', () => {
+    const result = analyzeCandles(makeCandles(300, 0.001, 2));
+    const levels = result.facts?.levels;
+    expect(levels).not.toBeNull();
+    const supports = levels?.supports ?? [];
+    const resistances = levels?.resistances ?? [];
+
+    const supportDistances = supports.map((level) => level.distancePercent);
+    const resistanceDistances = resistances.map((level) => level.distancePercent);
+    expect(supportDistances).toEqual([...supportDistances].sort((a, b) => b - a));
+    expect(resistanceDistances).toEqual([...resistanceDistances].sort((a, b) => a - b));
+
+    if (supports.length > 0) expect(levels?.nearestSupport).toBe(supports[0]);
+    if (resistances.length > 0) expect(levels?.nearestResistance).toBe(resistances[0]);
+  });
+
+  it('labels the whole-series and trend-window volatilities with their windows', () => {
+    const result = analyzeCandles(makeCandles(300, 0.001, 2));
+    const volatilityReading = result.interpretation?.volatilityReading ?? '';
+    expect(volatilityReading).toContain('انحراف معیار ساده روی کل 300 کندل');
+
+    const volatilityLine = result.facts?.trend.evidence.find((line) =>
+      line.includes('نوسان بازده‌ها'),
+    );
+    expect(volatilityLine).toBeTruthy();
+    expect(volatilityLine).toContain('انحراف معیار روی آخرین 90 کندل روند');
+    // The trend line must not reuse the whole-series label, so the two figures
+    // stay distinguishable inside the same report.
+    expect(volatilityLine).not.toContain('ساده روی کل');
   });
 
   it('records the fallback engine id', () => {

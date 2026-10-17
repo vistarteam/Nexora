@@ -24,13 +24,12 @@ describe('api client', () => {
       jsonResponse({
         ok: true,
         data: { items: [], count: 0 },
-        meta: { generatedAt: '2026-01-01T00:00:00.000Z', demo: true, persistent: false },
+        meta: { generatedAt: '2026-01-01T00:00:00.000Z', persistent: false },
       }),
     );
 
     const result = await api.watchlist();
     expect(result.data.count).toBe(0);
-    expect(result.meta.demo).toBe(true);
     expect(result.meta.persistent).toBe(false);
   });
 
@@ -44,7 +43,7 @@ describe('api client', () => {
             message: 'پارامترهای ورودی نامعتبر است.',
             details: [{ path: 'query.symbol', message: 'نماد الزامی است.' }],
           },
-          meta: { generatedAt: '2026-01-01T00:00:00.000Z', demo: false },
+          meta: { generatedAt: '2026-01-01T00:00:00.000Z' },
         },
         400,
       ),
@@ -114,7 +113,7 @@ describe('api client', () => {
         {
           ok: true,
           data: { report: { id: 'r1' }, saved: true, durationMs: 12 },
-          meta: { demo: true },
+          meta: {},
         },
         201,
       ),

@@ -3,7 +3,7 @@ import { useFormat } from '../../context/SettingsContext';
 import { api } from '../../lib/api';
 import { useApi } from '../../lib/hooks/useApi';
 import { ASSET_CLASS_LABELS, TIMEFRAME_LABELS, TREND_LABELS } from '../../lib/format';
-import { AnalysisStatusBadge, Badge, DataModeBadge } from '../ui/Badge';
+import { AnalysisStatusBadge, Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Card, CardBody, CardHeader } from '../ui/Card';
 import { EmptyState, ErrorState, TableSkeleton } from '../ui/Feedback';
@@ -77,7 +77,6 @@ export function RecentReportsList({ limit = 5 }: { limit?: number }): JSX.Elemen
                       {item.name}
                     </Link>
                     <AnalysisStatusBadge status={item.status} />
-                    <DataModeBadge mode={item.mode} />
                   </div>
                   <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-ink-subtle">
                     <span className="ltr-data">{item.symbol}</span>

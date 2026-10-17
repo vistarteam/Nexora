@@ -9,6 +9,9 @@ import type { AssetClass, MarketSymbol, Timeframe } from '../../types/domain.js'
  */
 export const MARKET_CATALOG: readonly MarketSymbol[] = [
   // ---------------- Cryptocurrency ----------------
+  // Quote currency is tether (USDT). In the default `auto` provider routing
+  // these tickers are served by an Iranian exchange (Nobitex), which lists the
+  // same USDT-quoted pairs, so the data is reachable without a proxy.
   { symbol: 'BINANCE:BTCUSDT', tvSymbol: 'BINANCE:BTCUSDT', name: 'بیت‌کوین / تتر', assetClass: 'crypto', venue: 'Binance' },
   { symbol: 'BINANCE:ETHUSDT', tvSymbol: 'BINANCE:ETHUSDT', name: 'اتریوم / تتر', assetClass: 'crypto', venue: 'Binance' },
   { symbol: 'BINANCE:SOLUSDT', tvSymbol: 'BINANCE:SOLUSDT', name: 'سولانا / تتر', assetClass: 'crypto', venue: 'Binance' },
@@ -18,8 +21,13 @@ export const MARKET_CATALOG: readonly MarketSymbol[] = [
   { symbol: 'BINANCE:DOGEUSDT', tvSymbol: 'BINANCE:DOGEUSDT', name: 'دوج‌کوین / تتر', assetClass: 'crypto', venue: 'Binance' },
   { symbol: 'BINANCE:AVAXUSDT', tvSymbol: 'BINANCE:AVAXUSDT', name: 'آوالانچ / تتر', assetClass: 'crypto', venue: 'Binance' },
   { symbol: 'BINANCE:LINKUSDT', tvSymbol: 'BINANCE:LINKUSDT', name: 'چین‌لینک / تتر', assetClass: 'crypto', venue: 'Binance' },
-  { symbol: 'BINANCE:MATICUSDT', tvSymbol: 'BINANCE:MATICUSDT', name: 'پالیگان / تتر', assetClass: 'crypto', venue: 'Binance' },
-  { symbol: 'BINANCE:TONUSDT', tvSymbol: 'BINANCE:TONUSDT', name: 'تون‌کوین / تتر', assetClass: 'crypto', venue: 'Binance' },
+  // POL is Polygon's current ticker (MATIC was retired); both listings below are
+  // pairs the Iranian venue actually serves, so the default `auto` routing never
+  // hands the user a crypto symbol that its provider rejects.
+  { symbol: 'BINANCE:POLUSDT', tvSymbol: 'BINANCE:POLUSDT', name: 'پالیگان / تتر', assetClass: 'crypto', venue: 'Binance' },
+  // Litecoin has years of history on the venue, so even the weekly timeframe
+  // clears the 205-bar floor `SMA200` needs (a recently listed token would not).
+  { symbol: 'BINANCE:LTCUSDT', tvSymbol: 'BINANCE:LTCUSDT', name: 'لایت‌کوین / تتر', assetClass: 'crypto', venue: 'Binance' },
   { symbol: 'BINANCE:TRXUSDT', tvSymbol: 'BINANCE:TRXUSDT', name: 'ترون / تتر', assetClass: 'crypto', venue: 'Binance' },
 
   // ---------------- Forex ----------------

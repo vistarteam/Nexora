@@ -1,13 +1,6 @@
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
 export { Card, CardBody, CardFooter, CardHeader } from './Card';
-export {
-  AnalysisStatusBadge,
-  Badge,
-  DataModeBadge,
-  DemoBadge,
-  type BadgeProps,
-  type BadgeTone,
-} from './Badge';
+export { AnalysisStatusBadge, Badge, type BadgeProps, type BadgeTone } from './Badge';
 export {
   Field,
   Input,

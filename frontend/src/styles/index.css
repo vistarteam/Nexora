@@ -252,6 +252,55 @@
   overflow: hidden;
 }
 
+/* ------------------------------------------------------------------ *
+ * Print / PDF export
+ *
+ * Exporting a report to PDF is the browser's print engine applied to the live
+ * page — which is exactly what lets the chart appear in the file: the browser
+ * rasterises the real canvas rather than capturing it through a library.
+ * Every node is hidden and only the region marked `nx-print-region` is revealed,
+ * so navigation, toolbars and toggles never reach paper.
+ * ------------------------------------------------------------------ */
+@page {
+  margin: 12mm;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .nx-print-region,
+  .nx-print-region * {
+    visibility: visible;
+  }
+
+  .nx-print-region {
+    position: absolute;
+    inset-inline-start: 0;
+    top: 0;
+    width: 100%;
+  }
+
+  /* Controls that only make sense on screen (export buttons, layer toggles). */
+  .nx-no-print {
+    display: none !important;
+  }
+
+  /* Keep the terminal's look instead of flattening it to plain white. */
+  .nx-print-region,
+  .nx-print-region * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* A chart or a table split across a page boundary is unreadable. */
+  .nx-print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

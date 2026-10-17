@@ -6,7 +6,7 @@ import {
   TREND_LABELS,
 } from '../../lib/format';
 import type { AnalysisReport } from '../../types/nexora';
-import { AnalysisStatusBadge, DataModeBadge } from '../ui/Badge';
+import { AnalysisStatusBadge } from '../ui/Badge';
 
 function MetaItem({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
@@ -30,7 +30,6 @@ export function ReportMeta({ report }: { report: AnalysisReport }): JSX.Element 
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <AnalysisStatusBadge status={report.status} />
-        <DataModeBadge mode={report.mode} />
         <span className="nx-chip border-border-strong bg-base-800 text-ink-muted">
           {ENGINE_LABELS[report.engine.id] ?? report.engine.id}
           <span className="ltr-data text-ink-subtle">{report.engine.version}</span>

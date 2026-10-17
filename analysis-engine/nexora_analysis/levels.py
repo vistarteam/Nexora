@@ -207,15 +207,20 @@ def detect_levels(
         if level["price"] > last_price
     ]
 
-    # Strongest first: more touches, then closer to price.
-    supports.sort(key=lambda item: (-item["touches"], -item["distancePercent"]))
-    resistances.sort(key=lambda item: (-item["touches"], item["distancePercent"]))
+    # Nearest to the reference price first: the analysis surfaces levels by their
+    # real distance from the current price, so the closest level on each side is
+    # the first row and `nearestSupport`/`nearestResistance` is always the first
+    # entry of its table (it can no longer be pushed past `max_levels` by levels
+    # that only had more touches).
+    supports.sort(key=lambda item: item["distancePercent"], reverse=True)
+    resistances.sort(key=lambda item: item["distancePercent"])
 
+    # With the nearest-first ordering above, the closest level is always the first
+    # row of its table, which is exactly what `nearestSupport`/`nearestResistance`
+    # promise.
     return {
         "supports": supports[:max_levels],
         "resistances": resistances[:max_levels],
-        "nearestSupport": max(supports, key=lambda item: item["distancePercent"]) if supports else None,
-        "nearestResistance": min(resistances, key=lambda item: item["distancePercent"])
-        if resistances
-        else None,
+        "nearestSupport": supports[0] if supports else None,
+        "nearestResistance": resistances[0] if resistances else None,
     }

@@ -35,7 +35,7 @@ export function createHistoryController(container: Container) {
       if (!id) throw ApiError.badRequest('شناسه گزارش مشخص نشده است.');
       const report = await container.history.get(id);
       if (!report) throw ApiError.notFound(`گزارشی با شناسه ${id} یافت نشد.`);
-      res.json(success({ report }, { ...storageMeta(), demo: report.mode === 'demo' }));
+      res.json(success({ report }, storageMeta()));
     }),
 
     remove: asyncHandler(async (req: Request, res: Response) => {

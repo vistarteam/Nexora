@@ -25,9 +25,19 @@ export interface TrendReading {
   tStatistic: number | null;
 }
 
-export function linearRegressionSlope(values: number[]): number | null {
+/**
+ * Least-squares fit of `values` against its own index.
+ *
+ * The index is the only regressor, so the fit is fully described by a slope and
+ * an intercept: `price(i) = intercept + slope * i`. Both are `null` when the fit
+ * is undefined (fewer than three points, or a degenerate x-spread).
+ */
+export function leastSquaresFit(values: number[]): {
+  slope: number | null;
+  intercept: number | null;
+} {
   const count = values.length;
-  if (count < 3) return null;
+  if (count < 3) return { slope: null, intercept: null };
 
   const meanX = (count - 1) / 2;
   const meanY = values.reduce((total, value) => total + value, 0) / count;
@@ -38,8 +48,34 @@ export function linearRegressionSlope(values: number[]): number | null {
     numerator += (index - meanX) * ((values[index] as number) - meanY);
     denominator += (index - meanX) ** 2;
   }
-  if (denominator === 0) return null;
-  return numerator / denominator;
+  if (denominator === 0) return { slope: null, intercept: null };
+
+  const slope = numerator / denominator;
+  return { slope, intercept: meanY - slope * meanX };
+}
+
+export function linearRegressionSlope(values: number[]): number | null {
+  return leastSquaresFit(values).slope;
+}
+
+/**
+ * Least-squares trend line over the most recent `maxWindow` values.
+ *
+ * Returns the fit with the window it was computed over, so a chart can draw the
+ * exact line the trend classification rests on. The regression is indexed from
+ * the start of the window: `price(i) = intercept + slope * (i - startIndex)`.
+ */
+export function regressionLine(
+  values: number[],
+  maxWindow = 90,
+): { slope: number; intercept: number; window: number; startIndex: number } | null {
+  const window = Math.min(values.length, maxWindow);
+  if (window < 3) return null;
+
+  const { slope, intercept } = leastSquaresFit(values.slice(-window));
+  if (slope === null || intercept === null) return null;
+
+  return { slope, intercept, window, startIndex: values.length - window };
 }
 
 /**
@@ -187,7 +223,8 @@ export function classifyTrend(
       : `آماره t این شیب ${signedT >= 0 ? '+' : ''}${signedT.toFixed(2)} است ` +
         `(آستانه معناداری ${TREND_T_THRESHOLD}) و بنابراین ` +
         `${Math.abs(signedT) >= TREND_T_THRESHOLD ? 'معنادار' : 'قابل تفکیک از نویز نیست'} ارزیابی می‌شود.`,
-    `نوسان بازده‌ها ${(volatility * 100).toFixed(3)} درصد در هر کندل است.`,
+    `نوسان بازده‌ها (انحراف معیار روی آخرین ${window} کندل روند) ` +
+      `${(volatility * 100).toFixed(3)} درصد در هر کندل است.`,
     `ساختار سقف‌ها: سقف‌های بالاتر${higherHighs ? ' دیده می‌شود.' : ' دیده نمی‌شود.'}`,
     `ساختار کف‌ها: کف‌های بالاتر${higherLows ? ' دیده می‌شود.' : ' دیده نمی‌شود.'}`,
   ];

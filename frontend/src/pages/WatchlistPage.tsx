@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { SymbolPicker } from '../components/market/SymbolPicker';
-import { Badge, DataModeBadge } from '../components/ui/Badge';
+import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card, CardBody, CardHeader } from '../components/ui/Card';
 import { SegmentedControl } from '../components/ui/Field';
@@ -77,7 +77,10 @@ export function WatchlistPage(): JSX.Element {
       />
 
       <div className="space-y-4 sm:space-y-5">
-        <Card>
+        {/* `relative z-10` keeps the symbol dropdown above the cards below it;
+            `.nx-card`'s backdrop-blur would otherwise create a stacking context
+            that paints the listbox underneath the following card. */}
+        <Card className="relative z-10">
           <CardHeader
             title="افزودن نماد"
             description="نماد را جست‌وجو کنید، کلاس دارایی را انتخاب و به لیست اضافه کنید."
@@ -238,8 +241,6 @@ export function WatchlistPage(): JSX.Element {
         {bootstrap ? (
           <p className="text-2xs leading-6 text-ink-subtle">
             منبع داده فعلی: <span className="text-ink-muted">{bootstrap.marketData.label}</span>
-            {bootstrap.marketData.isDemo ? ' (دمو — قیمت واقعی نیست)' : ''} · وضعیت داده:{' '}
-            <DataModeBadge mode={bootstrap.marketData.isDemo ? 'demo' : 'live'} />
           </p>
         ) : null}
       </div>

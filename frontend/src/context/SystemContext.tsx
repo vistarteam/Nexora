@@ -6,9 +6,9 @@ import type { BootstrapPayload, HealthPayload } from '../types/nexora';
  * Global system status.
  *
  * Fetched once at start-up and exposed to every page, because several screens
- * need the same three facts: whether the data is demo, which provider is
- * configured, and whether the storage is durable. Polling keeps the topbar's
- * connection indicator truthful without each page polling separately.
+ * need the same facts: which provider supplies the candles, and whether the
+ * storage is durable. Polling keeps the topbar's connection indicator truthful
+ * without each page polling separately.
  */
 interface SystemContextValue {
   bootstrap: BootstrapPayload | null;
@@ -19,8 +19,7 @@ interface SystemContextValue {
   refreshHealth: () => Promise<void>;
   /** Reloads `/api/config`, e.g. after changing backend environment. */
   reloadBootstrap: () => Promise<void>;
-  /** Convenience flags derived from the payloads. */
-  isDemo: boolean;
+  /** Convenience flag derived from the payloads. */
   storagePersistent: boolean;
 }
 
@@ -89,7 +88,6 @@ export function SystemProvider({ children }: { children: ReactNode }): JSX.Eleme
       error,
       refreshHealth,
       reloadBootstrap,
-      isDemo: bootstrap?.marketData.isDemo ?? true,
       storagePersistent: bootstrap?.storage.persistent ?? false,
     }),
     [bootstrap, error, health, loading, refreshHealth, reloadBootstrap],

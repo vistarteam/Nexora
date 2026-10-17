@@ -1,7 +1,6 @@
 import type { ApiFailure, ApiMeta, ApiSuccess } from '../types/api.js';
 
 export interface EnvelopeOptions {
-  demo?: boolean;
   persistent?: boolean;
   storage?: string;
   notices?: string[];
@@ -10,7 +9,6 @@ export interface EnvelopeOptions {
 export function buildMeta(options: EnvelopeOptions = {}): ApiMeta {
   const meta: ApiMeta = {
     generatedAt: new Date().toISOString(),
-    demo: options.demo ?? false,
   };
   if (options.persistent !== undefined) meta.persistent = options.persistent;
   if (options.storage !== undefined) meta.storage = options.storage;

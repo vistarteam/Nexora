@@ -4,27 +4,24 @@ import { cn } from '../../lib/cn';
 /**
  * Market-data connection status.
  *
- * Reports what is actually known: whether the API answered, which provider is
- * configured, and whether that provider serves live or demo data. It never
- * shows a green "connected" light for demo data, because demo candles are not a
- * market connection.
+ * Reports what is actually known: whether the API answered and which provider
+ * supplies the candles. It only shows a green "connected" light when a real
+ * market-data provider answered.
  */
 export function ConnectionIndicator({ className }: { className?: string }): JSX.Element {
-  const { health, error, loading, refreshHealth, isDemo } = useSystem();
+  const { health, error, loading, refreshHealth } = useSystem();
 
-  const state: 'checking' | 'live' | 'demo' | 'offline' = (() => {
+  const state: 'checking' | 'live' | 'offline' = (() => {
     if (error && !health) return 'offline';
     if (loading && !health) return 'checking';
     if (!health) return 'offline';
-    if (isDemo) return 'demo';
-    return 'live';
+    return health.checks.marketData.mode === 'live' ? 'live' : 'offline';
   })();
 
   const presentation = {
     checking: { label: 'در حال بررسی…', dot: 'bg-ink-subtle', text: 'text-ink-muted' },
     live: { label: 'داده زنده', dot: 'bg-bull', text: 'text-bull' },
-    demo: { label: 'حالت دمو', dot: 'bg-warn', text: 'text-warn' },
-    offline: { label: 'قطع ارتباط', dot: 'bg-bear', text: 'text-bear' },
+    offline: { label: 'منبع داده آماده نیست', dot: 'bg-bear', text: 'text-bear' },
   }[state];
 
   const providerLabel = health?.checks.marketData.provider ?? '—';

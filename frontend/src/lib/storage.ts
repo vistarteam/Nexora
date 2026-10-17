@@ -24,6 +24,8 @@ export const STORAGE_KEYS = {
   watchlist: 'nexora.watchlist.v1',
   historyCache: 'nexora.history-cache.v1',
   lastSelection: 'nexora.selection.v1',
+  /** Drawings are keyed per symbol+timeframe inside this one entry. */
+  chartDrawings: 'nexora.chart-drawings.v1',
 } as const;
 
 export const OWNED_KEYS: readonly string[] = Object.values(STORAGE_KEYS);

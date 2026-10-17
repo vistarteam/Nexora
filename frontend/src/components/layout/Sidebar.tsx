@@ -68,11 +68,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }): JSX.Elemen
       <div className="mt-2 rounded-lg border border-border bg-base-900/70 px-3 py-2.5">
         <p className="text-2xs text-ink-subtle">وضعیت سرویس</p>
         <p className="mt-1 text-2xs text-ink-muted">
-          {bootstrap
-            ? bootstrap.marketData.isDemo
-              ? 'حالت دمو — داده واقعی پیکربندی نشده است.'
-              : `منبع داده: ${bootstrap.marketData.label}`
-            : 'در حال دریافت وضعیت…'}
+          {bootstrap ? `منبع داده: ${bootstrap.marketData.label}` : 'در حال دریافت وضعیت…'}
         </p>
       </div>
     </nav>

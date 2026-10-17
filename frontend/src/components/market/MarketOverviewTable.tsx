@@ -6,7 +6,6 @@ import { cn } from '../../lib/cn';
 import { useApi } from '../../lib/hooks/useApi';
 import { ASSET_CLASS_LABELS, TIMEFRAME_LABELS, toneForChange } from '../../lib/format';
 import type { AssetClass, Timeframe } from '../../types/nexora';
-import { DataModeBadge } from '../ui/Badge';
 import { Card, CardBody, CardHeader } from '../ui/Card';
 import { EmptyState, ErrorState, TableSkeleton } from '../ui/Feedback';
 import { Button } from '../ui/Button';
@@ -22,7 +21,6 @@ export interface OverviewSymbol {
 interface OverviewRow extends OverviewSymbol {
   price: number | null;
   changePercent: number | null;
-  mode: 'live' | 'demo' | null;
   candleTime: number | null;
   /** Per-symbol failure message; one bad symbol must not break the table. */
   error: string | null;
@@ -75,7 +73,6 @@ export function MarketOverviewTable({
                 ...base,
                 price: null,
                 changePercent: null,
-                mode: null,
                 candleTime: null,
                 error:
                   reason instanceof ApiError ? reason.message : 'دریافت داده این نماد ناموفق بود.',
@@ -95,7 +92,6 @@ export function MarketOverviewTable({
               ...base,
               price: last?.close ?? null,
               changePercent,
-              mode: series.source.mode,
               candleTime: last?.time ?? null,
               error: null,
             };
@@ -105,7 +101,6 @@ export function MarketOverviewTable({
   );
 
   const rows = state.data ?? [];
-  const demo = rows.some((row) => row.mode === 'demo');
 
   return (
     <Card>
@@ -116,19 +111,16 @@ export function MarketOverviewTable({
           `قیمت آخرین کندل و تغییر در بازه ${TIMEFRAME_LABELS[timeframe]} — محاسبه‌شده از داده سرویس تحلیل.`
         }
         actions={
-          <>
-            {demo ? <DataModeBadge mode="demo" /> : null}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={state.reload}
-              loading={state.refreshing}
-              aria-label="به‌روزرسانی نمای کلی بازار"
-            >
-              <RefreshIcon width={14} height={14} />
-              <span className="text-2xs">به‌روزرسانی</span>
-            </Button>
-          </>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={state.reload}
+            loading={state.refreshing}
+            aria-label="به‌روزرسانی نمای کلی بازار"
+          >
+            <RefreshIcon width={14} height={14} />
+            <span className="text-2xs">به‌روزرسانی</span>
+          </Button>
         }
       />
 
@@ -186,15 +178,14 @@ export function MarketOverviewTable({
                       {row.changePercent === null ? '—' : format.percent(row.changePercent)}
                     </td>
                     <td className="whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        {row.mode ? <DataModeBadge mode={row.mode} /> : <span className="text-2xs text-ink-subtle">—</span>}
-                        {row.candleTime ? (
-                          <span className="inline-flex items-center gap-1 text-2xs text-ink-subtle">
-                            <ClockIcon width={12} height={12} />
-                            {format.relative(new Date(row.candleTime).toISOString())}
-                          </span>
-                        ) : null}
-                      </div>
+                      {row.candleTime ? (
+                        <span className="inline-flex items-center gap-1 text-2xs text-ink-subtle">
+                          <ClockIcon width={12} height={12} />
+                          {format.relative(new Date(row.candleTime).toISOString())}
+                        </span>
+                      ) : (
+                        <span className="text-2xs text-ink-subtle">—</span>
+                      )}
                     </td>
                     <td>
                       <div className="flex items-center gap-1.5">

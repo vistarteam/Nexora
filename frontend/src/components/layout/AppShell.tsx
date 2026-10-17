@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { DemoBanner } from './DemoBanner';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { CloseIcon } from '../ui/Icons';
@@ -93,14 +92,13 @@ export function AppShell(): JSX.Element {
         <Topbar onOpenMenu={() => setDrawerOpen(true)} />
         <main className="flex-1 px-3 py-4 sm:px-5 sm:py-6">
           <div className="mx-auto w-full max-w-[100rem] space-y-4 sm:space-y-5">
-            <DemoBanner />
             <Outlet />
           </div>
         </main>
         <footer className="border-t border-border px-4 py-4 sm:px-5">
           <p className="text-2xs leading-6 text-ink-subtle">
             نکسورا · تحلیل تکنیکال خودکار است و توصیه سرمایه‌گذاری، پیش‌بینی قطعی یا تضمین سود نیست.
-            نمودارها توسط TradingView ارائه می‌شوند.
+            نمودارها از داده سرویس تحلیل نکسورا رسم می‌شوند.
           </p>
         </footer>
       </div>

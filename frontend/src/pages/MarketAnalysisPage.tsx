@@ -1,48 +1,61 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { AnalysisChart } from '../components/chart/AnalysisChart';
 import { SelectionBar } from '../components/market/SelectionBar';
 import { TradingViewChart } from '../components/market/TradingViewChart';
-import { Badge, DataModeBadge } from '../components/ui/Badge';
+import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card, CardBody, CardHeader } from '../components/ui/Card';
 import { ErrorState, Skeleton } from '../components/ui/Feedback';
-import { ExternalIcon, InfoIcon, SparkIcon } from '../components/ui/Icons';
+import { ExternalIcon, SparkIcon } from '../components/ui/Icons';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Toggle } from '../components/ui/Field';
 import { useFormat, useSettings } from '../context/SettingsContext';
 import { useSystem } from '../context/SystemContext';
 import { api } from '../lib/api';
+import { windowChangePercent } from '../lib/chart';
 import { useApi } from '../lib/hooks/useApi';
 import { useDefaultSelection } from '../lib/hooks/useDefaultSelection';
+import { useLiveTicker } from '../lib/hooks/useLiveTicker';
 import { useSelection } from '../lib/hooks/useSelection';
-import { TIMEFRAME_LABELS } from '../lib/format';
+import { ASSET_CLASS_LABELS, TIMEFRAME_LABELS } from '../lib/format';
 
 /**
  * Market Analysis.
  *
- * Owns the TradingView Advanced Chart embed. Everything else on the page exists
- * to make one distinction obvious: the chart is a *visual* integration, while
- * the analysis engine reads candles from the backend market-data service. The
- * data panel below the chart shows exactly what that service returned.
+ * The chart here is drawn from `/api/chart`: real candles from the configured
+ * provider, with the analysis engine's own moving averages, levels, swing points
+ * and oscillators on top of them.
+ *
+ * This replaced a TradingView embed. The embed looked impressive but charted a
+ * different venue, at its own interval, with its own indicator settings — so the
+ * chart and the analysis described two different markets, and the page carried
+ * two candle counts instead of one. A chart the engine did not produce cannot be
+ * reconciled with the engine's numbers, which is why it is now optional rather
+ * than the default.
  */
 export function MarketAnalysisPage(): JSX.Element {
   const defaults = useDefaultSelection();
   const { selection, setSymbol, setAssetClass, setTimeframe } = useSelection(defaults);
   const { settings } = useSettings();
-  const { bootstrap, isDemo } = useSystem();
+  const { bootstrap } = useSystem();
   const format = useFormat();
-  const [chartNote, setChartNote] = useState<string | null>(null);
+  // Shown by default: this is the real TradingView chart — its own live feed and
+  // its own indicators — and users expect it on a market page. The engine's chart
+  // remains below it, because only that one is reconciled with the report.
+  const [showEmbed, setShowEmbed] = useState(true);
 
   const effectiveSymbol = selection.symbol ?? defaults.symbol ?? 'BINANCE:BTCUSDT';
 
-  const candles = useApi(
+  const chartState = useApi(
     effectiveSymbol
       ? (signal) =>
-          api.candles(
+          api.chart(
             {
               symbol: effectiveSymbol,
               assetClass: selection.assetClass,
               timeframe: selection.timeframe,
-              limit: 120,
+              limit: 300,
             },
             signal,
           )
@@ -50,23 +63,32 @@ export function MarketAnalysisPage(): JSX.Element {
     [effectiveSymbol, selection.assetClass, selection.timeframe],
   );
 
-  const series = candles.data?.data ?? null;
-  const lastCandle = series?.candles[series.candles.length - 1] ?? null;
-  const firstCandle = series?.candles[0] ?? null;
-  const change =
-    lastCandle && firstCandle && firstCandle.close !== 0
-      ? ((lastCandle.close - firstCandle.close) / Math.abs(firstCandle.close)) * 100
-      : null;
+  const chart = chartState.data?.data ?? null;
+
+  // Kept live once the history has arrived: the whole point of this page is that
+  // the price on screen is the price now, not the price when the page opened.
+  const live = useLiveTicker(
+    {
+      symbol: effectiveSymbol,
+      assetClass: selection.assetClass,
+      timeframe: selection.timeframe,
+    },
+    { enabled: chart !== null },
+  );
+
+  const candles = chart?.candles ?? [];
+  const lastCandle = candles[candles.length - 1] ?? null;
+  const change = windowChangePercent(candles);
 
   return (
     <div>
       <PageHeader
         title="تحلیل بازار"
-        description="نماد، کلاس دارایی و تایم‌فریم را انتخاب کنید تا نمودار و داده‌ی موتور تحلیل به‌روزرسانی شود."
+        description="نمودار از داده واقعی سرویس بازار ساخته می‌شود و تحلیل موتور (میانگین‌ها، سطوح، نقاط چرخش و نوسان‌نماها) روی همان نمودار ترسیم می‌شود."
         badges={
           <>
-            {isDemo ? <DataModeBadge mode="demo" /> : <Badge tone="bull" dot>داده واقعی</Badge>}
-            <Badge tone="neutral">TradingView Advanced Chart</Badge>
+            <Badge tone="bull" dot>داده واقعی</Badge>
+            <Badge tone="neutral">تحلیل روی نمودار</Badge>
           </>
         }
         actions={
@@ -90,135 +112,151 @@ export function MarketAnalysisPage(): JSX.Element {
           setAssetClass(market.assetClass);
           setSymbol(market.symbol);
         }}
-        hint="تغییر هر پارامتر، هم نمودار و هم پنل داده زیر آن را به‌روزرسانی می‌کند."
+        hint="نمودار و تحلیل هر دو از یک درخواست ساخته می‌شوند؛ بنابراین اعداد روی نمودار با اعداد تحلیل یکی است."
       />
 
       <div className="mt-4 space-y-4 sm:mt-5 sm:space-y-5">
         <Card>
           <CardHeader
-            title="نمودار قیمت"
-            description={`${TIMEFRAME_LABELS[selection.timeframe]} · ${effectiveSymbol}`}
+            title="نمودار و تحلیل"
+            description={
+              chart
+                ? `${TIMEFRAME_LABELS[chart.timeframe]} · ${chart.symbol} · ${chart.assetClass}`
+                : 'در حال دریافت داده و محاسبه تحلیل…'
+            }
             actions={
-              <Badge tone="info" title="نمودار TradingView فقط برای نمایش است و منبع داده موتور تحلیل نیست.">
-                نمایشی
-              </Badge>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={chartState.reload}
+                loading={chartState.refreshing}
+                aria-label="به‌روزرسانی نمودار و تحلیل"
+              >
+                به‌روزرسانی
+              </Button>
             }
           />
-          <CardBody>
-            <TradingViewChart
-              symbol={effectiveSymbol}
-              timeframe={selection.timeframe}
-              theme={settings.theme}
-              height={520}
-              {...(chartNote ? { onUnavailable: setChartNote } : {})}
-            />
-
-            {chartNote ? (
-              <p className="mt-3 text-2xs leading-6 text-warn">{chartNote}</p>
-            ) : null}
-
-            <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-base-900/50 px-3 py-2.5">
-              <InfoIcon width={15} height={15} className="mt-0.5 shrink-0 text-ink-subtle" />
-              <p className="text-2xs leading-6 text-ink-muted">
-                نمودار بالا از ویجت رسمی TradingView استفاده می‌کند و تنها برای مشاهده است. موتور تحلیل
-                پایتون هیچ داده‌ای از این ویجت نمی‌خواند؛ کندل‌ها از سرویس داده سرور نکسورا تأمین
-                می‌شوند (پنل زیر).
+          <CardBody className="p-0">
+            {chartState.loading ? (
+              <div className="p-4">
+                <Skeleton lines={8} />
+              </div>
+            ) : chartState.error ? (
+              <div className="p-4">
+                <ErrorState error={chartState.error} onRetry={chartState.reload} />
+              </div>
+            ) : chart ? (
+              <AnalysisChart chart={chart} height={560} live={live} />
+            ) : (
+              <p className="p-4 text-2xs text-ink-muted">
+                سرویس داده برای این نماد و تایم‌فریم کندلی برنگرداند. نماد یا تایم‌فریم دیگری را امتحان کنید.
               </p>
-            </div>
+            )}
           </CardBody>
         </Card>
 
         <Card>
           <CardHeader
             title="داده‌ی موتور تحلیل"
-            description="این همان داده‌ای است که به موتور تحلیل پایتون داده می‌شود."
-            actions={
-              <>
-                {series ? <DataModeBadge mode={series.source.mode} /> : null}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={candles.reload}
-                  loading={candles.refreshing}
-                  aria-label="به‌روزرسانی داده"
-                >
-                  به‌روزرسانی
-                </Button>
-              </>
-            }
+            description="این همان داده‌ای است که به موتور تحلیل داده می‌شود و نمودار بالا از آن ساخته شده است."
           />
           <CardBody>
-            {candles.loading ? (
+            {chartState.loading ? (
               <Skeleton lines={4} />
-            ) : candles.error ? (
-              <ErrorState error={candles.error} onRetry={candles.reload} />
-            ) : !series || series.candles.length === 0 ? (
-              <p className="text-2xs text-ink-muted">
-                سرویس داده برای این نماد و تایم‌فریم کندلی برنگرداند. نماد یا تایم‌فریم دیگری را امتحان
-                کنید.
-              </p>
+            ) : !chart ? (
+              <p className="text-2xs text-ink-muted">داده‌ای برای نمایش وجود ندارد.</p>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <Metric label="منبع داده" value={series.source.provider} mono />
+                <Metric label="منبع داده" value={chart.dataSource} mono />
                 <Metric
-                  label="تعداد کندل دریافتی"
-                  value={format.integer(series.candles.length)}
+                  label="وضعیت تحلیل"
+                  value={chart.status === 'ok' ? 'کامل' : chart.status === 'insufficient_data' ? 'داده ناکافی' : 'در دسترس نیست'}
+                  tone={chart.status === 'ok' ? 'text-bull' : 'text-warn'}
                 />
+                <Metric label="تعداد کندل" value={format.integer(candles.length)} />
                 <Metric
                   label="قیمت آخرین کندل"
                   value={lastCandle ? format.number(lastCandle.close) : '—'}
-                  tone={(change ?? 0) > 0 ? 'text-bull' : (change ?? 0) < 0 ? 'text-bear' : 'text-ink'}
+                  tone={
+                    (change ?? 0) > 0 ? 'text-bull' : (change ?? 0) < 0 ? 'text-bear' : 'text-ink'
+                  }
                 />
                 <Metric
-                  label="تغییر بازه ۱۲۰ کندل"
+                  label={`تغییر بازه ${format.integer(candles.length)} کندل`}
                   value={change === null ? '—' : format.percent(change)}
-                  tone={(change ?? 0) > 0 ? 'text-bull' : (change ?? 0) < 0 ? 'text-bear' : 'text-ink-muted'}
+                  tone={
+                    (change ?? 0) > 0
+                      ? 'text-bull'
+                      : (change ?? 0) < 0
+                        ? 'text-bear'
+                        : 'text-ink-muted'
+                  }
                 />
                 <Metric
                   label="زمان آخرین کندل"
                   value={lastCandle ? format.dateTime(new Date(lastCandle.time).toISOString()) : '—'}
                 />
+                <Metric label="زمان دریافت" value={format.dateTime(chart.generatedAt)} />
                 <Metric
-                  label="زمان دریافت"
-                  value={format.dateTime(series.source.fetchedAt)}
+                  label="وضعیت آخرین کندل"
+                  value={
+                    chart.lastCandleStatus === 'forming'
+                      ? 'در حال تشکیل'
+                      : chart.lastCandleStatus === 'unknown'
+                        ? 'نامشخص'
+                        : '—'
+                  }
+                  tone={chart.lastCandleStatus === 'forming' ? 'text-warn' : 'text-ink-muted'}
                 />
-                <Metric label="نماد TradingView" value={series.tvSymbol} mono />
-                <Metric label="تایم‌فریم" value={TIMEFRAME_LABELS[series.timeframe]} />
+                <Metric label="موتور تحلیل" value={`${chart.engine.id} ${chart.engine.version}`} mono />
+                <Metric label="نماد TradingView" value={chart.tvSymbol} mono />
+                <Metric label="تایم‌فریم" value={TIMEFRAME_LABELS[chart.timeframe]} />
               </div>
             )}
 
-            {series?.source.mode === 'demo' ? (
+            {bootstrap && !bootstrap.marketData.supports.includes(selection.assetClass) ? (
               <p className="mt-4 rounded-lg border border-warn/35 bg-warn/[0.07] px-3 py-2.5 text-2xs leading-6 text-ink-muted">
-                داده‌های این پنل دمو و ساختگی هستند و قیمت واقعی بازار نیستند. برای داده واقعی، متغیر
-                <span className="ltr-data"> MARKET_DATA_PROVIDER </span>
-                را در فایل <span className="ltr-data">.env</span> تنظیم کنید.
-                {bootstrap && !bootstrap.marketData.supports.includes('forex') ? (
-                  <span>
-                    {' '}
-                    منبع داده فعلی فقط کلاس‌های{' '}
-                    <span className="ltr-data">{bootstrap.marketData.supports.join(', ') || '—'}</span> را
-                    پشتیبانی می‌کند.
-                  </span>
-                ) : null}
+                منبع داده فعلی کلاس دارایی «{ASSET_CLASS_LABELS[selection.assetClass]}» را پشتیبانی
+                نمی‌کند. برای دریافت داده این کلاس، مقدار{' '}
+                <span className="ltr-data">MARKET_DATA_PROVIDER</span> را در فایل{' '}
+                <span className="ltr-data">.env</span> تنظیم کنید.
               </p>
             ) : null}
           </CardBody>
         </Card>
 
         <Card className="nx-card-body">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-2xs leading-6 text-ink-muted">
-              برای مشاهده این نماد در سایت TradingView (خارج از نکسورا) از لینک زیر استفاده کنید.
-            </p>
-            <a
-              className="nx-btn-secondary text-xs"
-              href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(effectiveSymbol)}`}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              باز کردن در TradingView
-              <ExternalIcon width={14} height={14} />
-            </a>
+          <div className="space-y-3">
+            <Toggle
+              checked={showEmbed}
+              onChange={setShowEmbed}
+              label="نمودار زنده TradingView"
+              description="نمودار رسمی و زنده TradingView با اندیکاتورهای خودش (EMA، SMA، RSI، MACD، حجم). TradingView هیچ API برای خواندن کندل‌ها یا مقادیر اندیکاتورهایش منتشر نمی‌کند و استفاده غیرنمایشی از داده‌اش را محدود کرده است؛ بنابراین تحلیل نکسورا از منبع صرافی/بازار تغذیه می‌شود و ممکن است اعدادش کمی با این نمودار تفاوت داشته باشد."
+            />
+
+            {showEmbed ? (
+              <TradingViewChart
+                symbol={chart?.tvSymbol ?? effectiveSymbol}
+                timeframe={selection.timeframe}
+                theme={settings.theme}
+                height={480}
+              />
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-2xs leading-6 text-ink-muted">
+                  برای مشاهده این نماد در سایت TradingView (خارج از نکسورا) از لینک زیر استفاده کنید.
+                </p>
+                <a
+                  className="nx-btn-secondary text-xs"
+                  href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(chart?.tvSymbol ?? effectiveSymbol)}`}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  باز کردن در TradingView
+                  <ExternalIcon width={14} height={14} />
+                </a>
+              </div>
+            )}
           </div>
         </Card>
       </div>

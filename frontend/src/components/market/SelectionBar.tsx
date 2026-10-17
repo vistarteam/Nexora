@@ -34,7 +34,11 @@ export function SelectionBar({
   hint,
 }: SelectionBarProps): JSX.Element {
   return (
-    <Card className="nx-card-body">
+    // `relative z-10` lifts this toolbar above the sibling cards that follow it.
+    // Without it the symbol dropdown (absolutely positioned) is painted *under*
+    // the price-chart card: `.nx-card` uses backdrop-blur, which creates a
+    // stacking context, so a child z-index can never escape it.
+    <Card className="relative z-10 nx-card-body">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_auto] lg:items-end">
         <div className="grid gap-4 sm:grid-cols-2">
           <SymbolPicker

@@ -5,8 +5,10 @@ import type {
   ApiMeta,
   BootstrapPayload,
   CandleSeries,
+  ChartPayload,
   HealthPayload,
   MarketsPayload,
+  TickerSnapshot,
   WatchlistItem,
 } from '../types/nexora';
 
@@ -17,8 +19,8 @@ import type {
  *  - unwrap the `{ ok, data, meta }` envelope so callers never see it,
  *  - turn every failure mode (HTTP error, network failure, malformed body) into
  *    a single `ApiError` type the UI can render,
- *  - surface the `meta` block, which is how the UI learns that a response is
- *    demo data or that persistence is not durable.
+ *  - surface the `meta` block, which is how the UI learns that persistence is
+ *    not durable.
  */
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
@@ -135,7 +137,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<A
     );
   }
 
-  return { data: envelope.data, meta: envelope.meta ?? { generatedAt: '', demo: false } };
+  return { data: envelope.data, meta: envelope.meta ?? { generatedAt: '' } };
 }
 
 /* ------------------------------------------------------------------ *
@@ -147,6 +149,17 @@ export const api = {
 
   bootstrap: (signal?: AbortSignal) => request<BootstrapPayload>('/config', { signal }),
 
+  /**
+   * Live snapshot: newest price, the forming candle, and when it closes.
+   *
+   * Called once a second by a live chart, so it is intentionally tiny — the
+   * full candle history is fetched only when a chart is (re)built.
+   */
+  ticker: (
+    params: { symbol: string; assetClass: string; timeframe: string },
+    signal?: AbortSignal,
+  ) => request<TickerSnapshot>('/ticker', { params, signal }),
+
   markets: (
     params: { assetClass?: string; q?: string } = {},
     signal?: AbortSignal,
@@ -157,11 +170,29 @@ export const api = {
     signal?: AbortSignal,
   ) => request<CandleSeries>('/market-data', { params, signal }),
 
+  chart: (
+    params: { symbol: string; assetClass: string; timeframe: string; limit?: number },
+    signal?: AbortSignal,
+  ) => request<ChartPayload>('/chart', { params, signal }),
+
   runAnalysis: (
-    body: { symbol: string; assetClass: string; timeframe: string; limit?: number; save?: boolean },
+    body: {
+      symbol: string;
+      assetClass: string;
+      timeframe: string;
+      limit?: number;
+      save?: boolean;
+      /** Ask for the chart payload computed from the same run. */
+      includeChart?: boolean;
+    },
     signal?: AbortSignal,
   ) =>
-    request<{ report: AnalysisReport; saved: boolean; durationMs: number }>('/analysis', {
+    request<{
+      report: AnalysisReport;
+      chart: ChartPayload | null;
+      saved: boolean;
+      durationMs: number;
+    }>('/analysis', {
       method: 'POST',
       body,
       signal,

@@ -7,10 +7,17 @@ import type { Timeframe } from '../../types/nexora';
 /**
  * TradingView Advanced Chart embed.
  *
- * This is the *official* embed widget (`embed-widget-advanced-chart.js`). It is
- * a visual integration only: it is never used as a data source for the analysis
- * engine. Candles come from the backend market-data service instead, because the
- * widget exposes no supported API for programme-driven reads.
+ * This is the *official* embed widget (`embed-widget-advanced-chart.js`), so the
+ * chart, its data feed and its indicators are TradingView's own and update in
+ * real time without any help from this application.
+ *
+ * It is a **visual** integration only, and deliberately so. TradingView publishes
+ * no API for reading candles or indicator values out of the widget, and its terms
+ * restrict non-display use of its data — reaching into the iframe, or scraping an
+ * internal endpoint, would be both brittle and against those terms. So the
+ * analysis engine is fed by the backend market-data service (the venue that
+ * actually trades the instrument), and the two are labelled separately in the UI
+ * rather than silently conflated.
  *
  * The widget is a script that injects an iframe. React cannot manage that
  * DOM directly, so the container is owned imperatively: on any prop change the
@@ -137,9 +144,14 @@ export function TradingViewChart({
           gridColor: theme === 'dark' ? 'rgba(29, 39, 55, 0.6)' : 'rgba(226, 232, 240, 0.8)',
           hide_side_toolbar: false,
           allow_symbol_change: true,
-          save_image: false,
+          // TradingView's own exporting is useful here precisely because the
+          // widget is the only place its data may legitimately be rendered.
+          save_image: true,
           details: false,
           withdateranges: true,
+          // TradingView's own built-in studies, so the indicators on this chart
+          // are TradingView's rather than ours drawn somewhere else.
+          studies: ['STD;EMA', 'STD;SMA', 'STD;RSI', 'STD;MACD', 'STD;Volume'],
           support_host: 'https://www.tradingview.com',
         });
         widget.appendChild(config);

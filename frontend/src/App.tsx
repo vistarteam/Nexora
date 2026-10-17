@@ -12,10 +12,9 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 /**
  * Route table.
  *
- * Every page renders inside `AppShell`, so navigation, the demo banner and the
- * connection indicator are present on all of them. The error boundary wraps the
- * whole tree: a render error shows a recoverable message instead of a blank
- * screen.
+ * Every page renders inside `AppShell`, so navigation and the connection
+ * indicator are present on all of them. The error boundary wraps the whole tree:
+ * a render error shows a recoverable message instead of a blank screen.
  */
 export function App(): JSX.Element {
   return (

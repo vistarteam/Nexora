@@ -14,6 +14,10 @@ build/
 *.log
 npm-debug.log*
 
+# Local run/scratch artifacts (dev-server logs, cached API payloads, audit tooling)
+.freebuff/
+audit/tmp/
+
 # Python
 __pycache__/
 *.py[cod]

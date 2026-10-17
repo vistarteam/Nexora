@@ -1,12 +1,19 @@
 import { useCallback, useState } from 'react';
 import { ApiError, api } from '../api';
-import type { AnalysisReport, ApiMeta } from '../../types/nexora';
+import type { AnalysisReport, ApiMeta, ChartPayload } from '../../types/nexora';
 
 export type RunPhase = 'idle' | 'running' | 'done' | 'error';
 
 export interface RunState {
   phase: RunPhase;
   report: AnalysisReport | null;
+  /**
+   * Chart computed from the very same candle series as `report`.
+   *
+   * Kept beside the report rather than fetched separately so the chart on screen
+   * describes the analysis on screen, bar for bar.
+   */
+  chart: ChartPayload | null;
   error: ApiError | null;
   meta: ApiMeta | null;
   durationMs: number | null;
@@ -18,6 +25,7 @@ export interface RunState {
 const INITIAL: RunState = {
   phase: 'idle',
   report: null,
+  chart: null,
   error: null,
   meta: null,
   durationMs: null,
@@ -31,6 +39,8 @@ export interface RunInput {
   timeframe: string;
   limit?: number;
   save?: boolean;
+  /** Defaults to true: the analysis page always wants the chart. */
+  includeChart?: boolean;
 }
 
 /**
@@ -57,10 +67,11 @@ export function useAnalysisRun() {
     }));
 
     try {
-      const result = await api.runAnalysis(input);
+      const result = await api.runAnalysis({ ...input, includeChart: input.includeChart ?? true });
       setState({
         phase: 'done',
         report: result.data.report,
+        chart: result.data.chart,
         error: null,
         meta: result.meta,
         durationMs: result.data.durationMs,

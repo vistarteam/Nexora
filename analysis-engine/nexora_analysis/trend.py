@@ -23,7 +23,13 @@ from typing import Optional, Sequence
 
 from .levels import find_swings
 
-__all__ = ["linear_regression_slope", "slope_t_statistic", "classify_trend"]
+__all__ = [
+    "linear_regression_slope",
+    "least_squares_fit",
+    "regression_line",
+    "slope_t_statistic",
+    "classify_trend",
+]
 
 #: |t| at or above this is treated as a directed trend. 2.5 is a deliberately
 #: conservative bar: it asks for a slope unlikely to be pure noise.
@@ -36,19 +42,57 @@ TREND_T_THRESHOLD = 2.5
 STRENGTH_SATURATION_T = 200.0
 
 
-def linear_regression_slope(values: Sequence[float]) -> Optional[float]:
-    """Least-squares slope of ``values`` against its index."""
+def least_squares_fit(values: Sequence[float]) -> tuple[Optional[float], Optional[float]]:
+    """Return ``(slope, intercept)`` of the least-squares fit against the index.
+
+    The index is the only regressor, so the fit is fully described by these two
+    numbers: ``price(i) = intercept + slope * i``. ``(None, None)`` when the fit
+    is undefined (fewer than three points, or a degenerate x-spread).
+    """
     count = len(values)
     if count < 3:
-        return None
+        return None, None
 
+    series = [float(value) for value in values]
     mean_x = (count - 1) / 2.0
-    mean_y = sum(values) / count
-    numerator = sum((index - mean_x) * (value - mean_y) for index, value in enumerate(values))
+    mean_y = sum(series) / count
+    numerator = sum((index - mean_x) * (value - mean_y) for index, value in enumerate(series))
     denominator = sum((index - mean_x) ** 2 for index in range(count))
     if denominator == 0:
+        return None, None
+
+    slope = numerator / denominator
+    return slope, mean_y - slope * mean_x
+
+
+def linear_regression_slope(values: Sequence[float]) -> Optional[float]:
+    """Least-squares slope of ``values`` against its index."""
+    return least_squares_fit(values)[0]
+
+
+def regression_line(values: Sequence[float], max_window: int = 90) -> Optional[dict]:
+    """Least-squares trend line over the most recent ``max_window`` values.
+
+    Returns the fit together with the window it was computed over, so a chart can
+    draw the exact line the trend classification is based on. The regression is
+    indexed from the *start of the window*, which is why ``startIndex`` is part of
+    the result: ``price(i) = intercept + slope * (i - startIndex)``.
+    """
+    window = min(len(values), max_window)
+    if window < 3:
         return None
-    return numerator / denominator
+
+    window_values = [float(value) for value in values[-window:]]
+    slope, intercept = least_squares_fit(window_values)
+    if slope is None or intercept is None:
+        return None
+
+    return {
+        "slope": slope,
+        "intercept": intercept,
+        "window": window,
+        "startIndex": len(values) - window,
+    }
 
 
 def slope_t_statistic(values: Sequence[float]) -> tuple[Optional[float], Optional[float]]:
@@ -63,13 +107,14 @@ def slope_t_statistic(values: Sequence[float]) -> tuple[Optional[float], Optiona
     if count < 3:
         return None, None
 
+    series = [float(value) for value in values]
     mean_x = (count - 1) / 2.0
-    mean_y = sum(values) / count
+    mean_y = sum(series) / count
     sxx = sum((index - mean_x) ** 2 for index in range(count))
     if sxx == 0:
         return None, None
 
-    sxy = sum((index - mean_x) * (value - mean_y) for index, value in enumerate(values))
+    sxy = sum((index - mean_x) * (value - mean_y) for index, value in enumerate(series))
     slope = sxy / sxx
     intercept = mean_y - slope * mean_x
 
@@ -143,7 +188,11 @@ def classify_trend(
     slope_percent = (slope / abs(mean_price)) * 100.0
 
     # Volatility of close-to-close returns: supporting evidence, and the scale
-    # the reader needs to judge how large the slope is in practice.
+    # the reader needs to judge how large the slope is in practice. It is the
+    # standard deviation of close-to-close returns over the *same* rolling
+    # window the slope was fitted on — deliberately distinct from the whole
+    # series volatility reported in `facts.volatilityPercent` — and the Persian
+    # evidence states the window so the two can never be mistaken for one number.
     returns = [
         (window_closes[index] - window_closes[index - 1]) / window_closes[index - 1]
         for index in range(1, len(window_closes))
@@ -187,7 +236,8 @@ def classify_trend(
             f"{'معنادار' if abs(signed_t) >= TREND_T_THRESHOLD else 'قابل تفکیک از نویز نیست'} ارزیابی می‌شود."
         )
     evidence.append(
-        f"نوسان بازده‌ها {volatility * 100:.3f} درصد در هر کندل است."
+        f"نوسان بازده‌ها (انحراف معیار روی آخرین {window} کندل روند) "
+        f"{volatility * 100:.3f} درصد در هر کندل است."
     )
     evidence.append(
         "ساختار سقف‌ها: سقف‌های بالاتر"

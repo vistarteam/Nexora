@@ -5,9 +5,9 @@ import { AlertIcon, InfoIcon } from '../ui/Icons';
 /**
  * Warnings and the standing disclaimer.
  *
- * Runtime warnings (skipped candles, fallback engine, demo data) are rendered
- * here. They are never swallowed: if the engine had to improvise, the user is
- * told exactly how.
+ * Runtime warnings (skipped candles, fallback engine, forming last bar) are
+ * rendered here. They are never swallowed: if the engine had to improvise, the
+ * user is told exactly how.
  */
 export function NoticePanel({ report }: { report: AnalysisReport }): JSX.Element {
   return (

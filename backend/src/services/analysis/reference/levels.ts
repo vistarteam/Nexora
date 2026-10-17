@@ -158,8 +158,11 @@ export function detectLevels(
   const supports = merged.filter((level) => level.price < lastPrice).map(toLevel);
   const resistances = merged.filter((level) => level.price > lastPrice).map(toLevel);
 
-  supports.sort((a, b) => b.touches - a.touches || b.distancePercent - a.distancePercent);
-  resistances.sort((a, b) => b.touches - a.touches || a.distancePercent - b.distancePercent);
+  // Nearest to the reference price first: levels are surfaced by their real distance
+  // from the current price, so the closest level on each side is the first row and
+  // `nearestSupport`/`nearestResistance` is always the first entry of its table.
+  supports.sort((a, b) => b.distancePercent - a.distancePercent);
+  resistances.sort((a, b) => a.distancePercent - b.distancePercent);
 
   const trimmedSupports = supports.slice(0, maxLevels);
   const trimmedResistances = resistances.slice(0, maxLevels);
@@ -167,17 +170,7 @@ export function detectLevels(
   return {
     supports: trimmedSupports,
     resistances: trimmedResistances,
-    nearestSupport:
-      trimmedSupports.length === 0
-        ? null
-        : (trimmedSupports.reduce((best, item) =>
-            item.distancePercent > best.distancePercent ? item : best,
-          ) as SupportResistanceLevel),
-    nearestResistance:
-      trimmedResistances.length === 0
-        ? null
-        : (trimmedResistances.reduce((best, item) =>
-            item.distancePercent < best.distancePercent ? item : best,
-          ) as SupportResistanceLevel),
+    nearestSupport: trimmedSupports[0] ?? null,
+    nearestResistance: trimmedResistances[0] ?? null,
   };
 }

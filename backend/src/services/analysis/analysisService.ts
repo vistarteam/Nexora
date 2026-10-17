@@ -6,13 +6,15 @@ import {
   type AnalysisReport,
   type AssetClass,
   type CandleSeries,
+  type ChartPayload,
   type Timeframe,
 } from '../../types/domain.js';
 import { resolveSymbol, type MarketDataService } from '../marketData/index.js';
 import type { HistoryService } from '../historyService.js';
+import { buildChartPayload } from './chartPayload.js';
 import { analyzeCandles, describeReferenceEngine } from './reference/index.js';
 import { PythonEngineUnavailableError, runPythonEngine } from './pythonEngine.js';
-import { DEFAULT_ENGINE_OPTIONS, type EngineRunResult } from './types.js';
+import { DEFAULT_ENGINE_OPTIONS, type EngineOptions, type EngineRunResult } from './types.js';
 
 const log = createLogger('analysis:service');
 
@@ -26,11 +28,30 @@ export interface RunAnalysisInput {
   limit?: number;
   /** Persist the resulting report. Defaults to true. */
   save?: boolean;
+  /**
+   * Also return the chart payload computed from the very same candles.
+   *
+   * Requested by the UI instead of a second data call on purpose: when the chart
+   * comes from the same run as the report, its newest bar, its indicators and its
+   * levels are identical to the ones the report describes. Two separate fetches
+   * could drift apart by one forming candle, which is exactly the kind of
+   * mismatch that made the previous chart untrustworthy.
+   */
+  includeChart?: boolean;
+}
+
+/** Input for a chart-only request (no report is composed or persisted). */
+export interface ChartInput {
+  symbol: string;
+  assetClass: AssetClass;
+  timeframe: Timeframe;
+  limit?: number;
 }
 
 export interface RunAnalysisOutput {
   report: AnalysisReport;
-  demo: boolean;
+  /** Present only when the caller asked for it. */
+  chart: ChartPayload | null;
   saved: boolean;
   /** Wall-clock duration of the engine call, in milliseconds. */
   durationMs: number;
@@ -44,8 +65,8 @@ export interface RunAnalysisOutput {
  *   3. compose a report that always states its data mode and engine,
  *   4. optionally persist it.
  *
- * Demo data never gets silently upgraded to look real: the report's `mode`,
- * `dataSource` and `warnings` all carry the distinction to the UI.
+ * Every report records the venue that supplied its candles (`dataSource`) and
+ * the data mode, so a reading is never separated from its provenance.
  */
 export class AnalysisService {
   constructor(
@@ -56,6 +77,7 @@ export class AnalysisService {
   async run(input: RunAnalysisInput): Promise<RunAnalysisOutput> {
     const startedAt = Date.now();
     const limit = Math.min(Math.max(input.limit ?? DEFAULT_ANALYSIS_LIMIT, 60), config.marketData.maxLimit);
+    const includeChart = input.includeChart === true;
 
     const series = await this.marketData.fetchCandles({
       symbol: input.symbol,
@@ -64,10 +86,11 @@ export class AnalysisService {
       limit,
     });
 
-    const { result, warnings: engineWarnings } = await this.executeEngine(series, input);
+    const options: EngineOptions = { ...DEFAULT_ENGINE_OPTIONS, includeSeries: includeChart };
+    const { result, warnings: engineWarnings } = await this.executeEngine(series, input, options);
     const durationMs = Date.now() - startedAt;
 
-    const report = composeReport({ series, result, input, warnings: engineWarnings, durationMs });
+    const report = composeReport({ series, result, warnings: engineWarnings, durationMs });
 
     let saved = false;
     if (input.save !== false) {
@@ -82,9 +105,60 @@ export class AnalysisService {
       engine: report.engine.id,
       mode: report.mode,
       durationMs,
+      chart: includeChart,
+    });      return {
+        report,
+        chart: includeChart ? this.buildChart(series, result) : null,
+        saved,
+        durationMs,
+      };
+  }
+
+  /**
+   * Chart payload without a report.
+   *
+   * Same pipeline, same engine, same candles as `run()`; it simply skips report
+   * composition and persistence. This is what the market view uses, so the chart
+   * there is drawn from real provider candles and real engine output rather than
+   * from a third-party widget the engine knows nothing about.
+   */
+  async chart(input: ChartInput): Promise<ChartPayload> {
+    const startedAt = Date.now();
+    const limit = Math.min(Math.max(input.limit ?? DEFAULT_ANALYSIS_LIMIT, 60), config.marketData.maxLimit);
+    const options: EngineOptions = { ...DEFAULT_ENGINE_OPTIONS, includeSeries: true };
+
+    const series = await this.marketData.fetchCandles({
+      symbol: input.symbol,
+      assetClass: input.assetClass,
+      timeframe: input.timeframe,
+      limit,
     });
 
-    return { report, demo: report.mode === 'demo', saved, durationMs };
+    const { result } = await this.executeEngine(series, input, options);
+    const payload = this.buildChart(series, result);
+
+    log.info('chart computed', {
+      symbol: payload.symbol,
+      timeframe: payload.timeframe,
+      status: payload.status,
+      engine: payload.engine.id,
+      candles: payload.candles.length,
+      durationMs: Date.now() - startedAt,
+    });
+
+    return payload;
+  }
+
+  private buildChart(series: CandleSeries, result: EngineRunResult): ChartPayload {
+    return buildChartPayload({
+      series,
+      result,
+      options: DEFAULT_ENGINE_OPTIONS,
+      // `series.assetClass` is the class the market-data layer actually routed
+      // on (the catalog's, for a listed symbol), so the label matches the venue
+      // that answered rather than what the request happened to claim.
+      name: resolveSymbol(series.symbol, series.assetClass).name,
+    });
   }
 
   /**
@@ -94,7 +168,8 @@ export class AnalysisService {
    */
   private async executeEngine(
     series: CandleSeries,
-    input: RunAnalysisInput,
+    input: { symbol: string; assetClass: AssetClass; timeframe: Timeframe },
+    options: EngineOptions,
   ): Promise<{ result: EngineRunResult; warnings: string[] }> {
     const warnings: string[] = [];
 
@@ -103,7 +178,7 @@ export class AnalysisService {
         symbol: series.symbol,
         timeframe: series.timeframe,
         candles: series.candles,
-        options: DEFAULT_ENGINE_OPTIONS,
+        options,
       });
       return { result, warnings };
     } catch (error) {
@@ -124,6 +199,7 @@ export class AnalysisService {
             facts: null,
             interpretation: null,
             scenarios: [],
+            series: null,
             warnings: [],
             reason:
               'موتور تحلیل پایتون در دسترس نیست و اجرای جایگزین غیرفعال است. ' +
@@ -134,7 +210,7 @@ export class AnalysisService {
         };
       }
 
-      const fallback = analyzeCandles(series.candles, DEFAULT_ENGINE_OPTIONS, {
+      const fallback = analyzeCandles(series.candles, options, {
         symbol: series.symbol,
         timeframe: series.timeframe,
       });
@@ -150,19 +226,18 @@ export class AnalysisService {
 function composeReport(args: {
   series: CandleSeries;
   result: EngineRunResult;
-  input: RunAnalysisInput;
   warnings: string[];
   durationMs: number;
 }): AnalysisReport {
-  const { series, result, input, warnings, durationMs } = args;
+  const { series, result, warnings, durationMs } = args;
   const lastCandle = result.facts?.lastCandle ?? series.candles[series.candles.length - 1] ?? null;
-  const resolved = resolveSymbol(series.symbol, input.assetClass);
+  const resolved = resolveSymbol(series.symbol, series.assetClass);
 
   const combined = [...result.warnings, ...warnings];
   if (result.status !== 'ok' && result.reason) combined.push(result.reason);
-  if (series.source.mode === 'demo') {
+  if (series.lastCandleStatus === 'forming') {
     combined.push(
-      'این تحلیل روی داده‌های دمو (تولیدی و ساختگی) اجرا شده است و هیچ ارتباطی با قیمت واقعی بازار ندارد.',
+      'جدیدترین کندل هنوز در حال تشکیل است و مقدار نهایی آن قطعی نیست؛ بخش انتهایی محاسبات می‌تواند با بسته‌شدن این کندل تغییر کند.',
     );
   }
   if (durationMs > 5_000) {
@@ -177,8 +252,8 @@ function composeReport(args: {
     symbol: series.symbol,
     tvSymbol: series.tvSymbol,
     name: resolved.name,
-    assetClass: input.assetClass,
-    timeframe: input.timeframe,
+    assetClass: series.assetClass,
+    timeframe: series.timeframe,
     createdAt: new Date().toISOString(),
     dataTimestamp: lastCandle ? new Date(lastCandle.time).toISOString() : null,
     mode: series.source.mode,

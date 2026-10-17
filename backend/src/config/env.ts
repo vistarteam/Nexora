@@ -25,9 +25,22 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
-  MARKET_DATA_PROVIDER: z.enum(['demo', 'binance', 'none']).default('demo'),
+  // Live data by default, from sources reachable on Iranian networks:
+  //   auto    -> crypto from an Iranian exchange (Nobitex), forex/equities from a
+  //              keyless global feed (Yahoo Finance)
+  //   nobitex -> Nobitex only (crypto)
+  //   yahoo   -> Yahoo Finance only (forex + equities)
+  //   binance -> Binance public REST (crypto; blocked from Iranian IPs)
+  //   none    -> no data; endpoints answer with an explicit "unavailable" status
+  MARKET_DATA_PROVIDER: z
+    .enum(['auto', 'binance', 'nobitex', 'yahoo', 'none'])
+    .default('auto'),
   MARKET_DATA_API_KEY: z.string().optional().default(''),
   MARKET_DATA_BASE_URL: z.string().optional().default(''),
+  // Optional origin overrides for the Iran-reachable providers (e.g. point
+  // Nobitex at `https://apiv2.nobitex.ir`). Empty means use the built-in default.
+  MARKET_DATA_NOBITEX_BASE_URL: z.string().optional().default(''),
+  MARKET_DATA_YAHOO_BASE_URL: z.string().optional().default(''),
   MARKET_DATA_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(8000),
   MARKET_DATA_MAX_LIMIT: z.coerce.number().int().positive().max(5_000).default(1000),
 
@@ -63,6 +76,8 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       provider: env.MARKET_DATA_PROVIDER,
       apiKey: env.MARKET_DATA_API_KEY,
       baseUrl: env.MARKET_DATA_BASE_URL,
+      nobitexBaseUrl: env.MARKET_DATA_NOBITEX_BASE_URL,
+      yahooBaseUrl: env.MARKET_DATA_YAHOO_BASE_URL,
       timeoutMs: env.MARKET_DATA_TIMEOUT_MS,
       maxLimit: env.MARKET_DATA_MAX_LIMIT,
     },

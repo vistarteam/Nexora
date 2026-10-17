@@ -50,7 +50,7 @@ export function createHealthController(container: Container) {
         },
       };
 
-      res.status(200).json(success(payload, { demo: container.marketData.providerInfo.mode === 'demo' }));
+      res.status(200).json(success(payload));
     }),
   };
 }

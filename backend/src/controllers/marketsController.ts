@@ -41,18 +41,13 @@ export function createMarketsController(container: Container) {
         total: items.length,
       };
 
-      res.json(
-        success(payload, {
-          demo: container.marketData.providerInfo.mode === 'demo',
-          storage: container.storage.description.driver,
-        }),
-      );
+      res.json(success(payload, { storage: container.storage.description.driver }));
     }),
 
     /**
      * `GET /api/config` — everything the frontend needs to render itself
-     * honestly: whether data is live or demo, which assets/timeframes exist,
-     * and whether persistence is durable.
+     * honestly: which provider serves data, which assets/timeframes exist, and
+     * whether persistence is durable.
      */
     bootstrap: asyncHandler(async (_req: Request, res: Response) => {
       const provider = container.marketData.providerInfo;
@@ -73,8 +68,6 @@ export function createMarketsController(container: Container) {
               label: provider.label,
               mode: provider.mode,
               supports: provider.supports,
-              /** True when every candle the API returns is synthetic. */
-              isDemo: provider.mode === 'demo',
             },
             analysis: {
               engine: 'python',
@@ -87,7 +80,10 @@ export function createMarketsController(container: Container) {
               persistent: container.storage.description.persistent,
             },
           },
-          { demo: provider.mode === 'demo', storage: container.storage.description.driver, persistent: container.storage.description.persistent },
+          {
+            storage: container.storage.description.driver,
+            persistent: container.storage.description.persistent,
+          },
         ),
       );
     }),

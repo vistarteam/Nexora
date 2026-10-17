@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ConnectionPanel } from '../components/dashboard/ConnectionPanel';
 import { RecentReportsList } from '../components/dashboard/RecentReportsList';
 import { MarketOverviewTable, type OverviewSymbol } from '../components/market/MarketOverviewTable';
-import { Badge, DemoBadge } from '../components/ui/Badge';
+import { Badge } from '../components/ui/Badge';
 import { PageHeader } from '../components/ui/PageHeader';
 import { StatCard } from '../components/ui/StatCard';
 import { SparkIcon, StarIcon } from '../components/ui/Icons';
@@ -23,7 +23,7 @@ import { ASSET_CLASS_LABELS, TIMEFRAME_LABELS } from '../lib/format';
  * state, so a failure in one does not blank the page.
  */
 export function DashboardPage(): JSX.Element {
-  const { bootstrap, isDemo, health } = useSystem();
+  const { bootstrap, health } = useSystem();
   const { items: watchlist, loading: watchlistLoading } = useWatchlist();
   const defaults = useDefaultSelection();
   const format = useFormat();
@@ -67,7 +67,7 @@ export function DashboardPage(): JSX.Element {
         description="نمای کلی وضعیت بازار، واچ‌لیست و آخرین تحلیل‌های تولیدشده."
         badges={
           <>
-            {isDemo ? <DemoBadge /> : <Badge tone="bull" dot>داده واقعی</Badge>}
+            <Badge tone="bull" dot>داده واقعی</Badge>
             <Badge tone="neutral">
               تایم‌فریم پیش‌فرض: {TIMEFRAME_LABELS[defaults.timeframe]}
             </Badge>
@@ -89,20 +89,15 @@ export function DashboardPage(): JSX.Element {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="وضعیت اتصال بازار"
-          value={isDemo ? 'حالت دمو' : health ? 'متصل' : 'نامشخص'}
-          tone={isDemo ? 'text-warn' : 'text-bull'}
+          value={health ? 'متصل' : 'نامشخص'}
+          tone={health ? 'text-bull' : 'text-ink-muted'}
           hint={
             bootstrap
               ? `منبع: ${bootstrap.marketData.label}`
               : 'در حال دریافت تنظیمات سرویس…'
           }
           loading={!bootstrap}
-          trailing={
-            <span
-              aria-hidden="true"
-              className={`h-2 w-2 rounded-full ${isDemo ? 'bg-warn' : 'bg-bull'}`}
-            />
-          }
+          trailing={<span aria-hidden="true" className={`h-2 w-2 rounded-full ${health ? 'bg-bull' : 'bg-ink-subtle'}`} />}
         />
 
         <StatCard

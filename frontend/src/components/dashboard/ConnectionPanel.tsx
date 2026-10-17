@@ -38,7 +38,8 @@ function CheckRow({
  *
  * Explicitly distinguishes three things that are easy to conflate: whether the
  * API is reachable, whether a real data provider is configured, and whether the
- * analysis engine is available. Demo data is never shown as "connected".
+ * analysis engine is available. Only a configured provider is shown as serving
+ * market data.
  */
 export function ConnectionPanel(): JSX.Element {
   const { health, error, refreshHealth } = useSystem();
@@ -53,7 +54,7 @@ export function ConnectionPanel(): JSX.Element {
     <Card>
       <CardHeader
         title="وضعیت اتصال و سرویس‌ها"
-        description="وضعیت واقعی زیرسامانه‌ها؛ حالت دمو به‌معنای اتصال به بازار نیست."
+        description="وضعیت واقعی زیرسامانه‌ها؛ اتصال API، منبع داده بازار، موتور تحلیل و ذخیره‌سازی."
         actions={
           <Button size="sm" variant="ghost" onClick={() => void refreshHealth()} aria-label="بررسی مجدد وضعیت">
             <RefreshIcon width={14} height={14} />
@@ -89,18 +90,12 @@ export function ConnectionPanel(): JSX.Element {
             <div>
               <CheckRow
                 label="منبع داده بازار"
-                value={
-                  marketMode === 'live'
-                    ? 'داده واقعی'
-                    : marketMode === 'demo'
-                      ? 'داده دمو'
-                      : 'پیکربندی نشده'
-                }
-                tone={marketMode === 'live' ? 'ok' : marketMode === 'demo' ? 'warn' : 'error'}
+                value={marketMode === 'live' ? 'داده واقعی' : 'پیکربندی نشده'}
+                tone={marketMode === 'live' ? 'ok' : 'error'}
                 detail={
-                  marketMode === 'demo'
-                    ? 'کندل‌ها ساختگی هستند. برای داده واقعی MARKET_DATA_PROVIDER را تنظیم کنید.'
-                    : health.checks.marketData.detail
+                  marketMode === 'live'
+                    ? health.checks.marketData.detail
+                    : 'منبع داده‌ای پیکربندی نشده است؛ در فایل .env مقدار MARKET_DATA_PROVIDER را تنظیم کنید.'
                 }
               />
 

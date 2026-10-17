@@ -29,12 +29,21 @@ export const marketDataQuerySchema = z.object({
   limit: z.coerce.number().int().min(10).max(1000).default(300),
 });
 
+export const tickerQuerySchema = z.object({
+  symbol: symbolSchema,
+  assetClass: assetClassSchema.default('crypto'),
+  timeframe: timeframeSchema.default('1h'),
+});
+
 export const analysisBodySchema = z.object({
   symbol: symbolSchema,
   assetClass: assetClassSchema,
   timeframe: timeframeSchema,
   limit: z.coerce.number().int().min(60).max(1000).optional(),
   save: z.boolean().optional(),
+  // Ask for the chart payload (indicator series for every bar) alongside the
+  // report. Optional so an existing client keeps working unchanged.
+  includeChart: z.boolean().optional(),
 });
 
 export const watchlistBodySchema = z.object({
@@ -55,6 +64,7 @@ export const symbolParamSchema = z.object({
 });
 
 export type MarketDataQuery = z.infer<typeof marketDataQuerySchema>;
+export type TickerQuery = z.infer<typeof tickerQuerySchema>;
 export type AnalysisBody = z.infer<typeof analysisBodySchema>;
 export type WatchlistBody = z.infer<typeof watchlistBodySchema>;
 export type MarketsQuery = z.infer<typeof querySchema>;

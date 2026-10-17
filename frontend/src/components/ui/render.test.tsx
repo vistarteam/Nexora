@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../lib/api';
-import { AnalysisStatusBadge, Badge, DataModeBadge, DemoBadge } from './Badge';
+import { AnalysisStatusBadge, Badge } from './Badge';
 import { Button } from './Button';
 import { Card, CardBody, CardHeader } from './Card';
 import { SegmentedControl } from './Field';
@@ -40,22 +40,10 @@ describe('Button', () => {
 });
 
 describe('Badge family', () => {
-  it('renders a demo badge with an explanatory tooltip', () => {
-    const html = render(<DemoBadge />);
-    expect(html).toContain('دمو');
-    expect(html).toContain('title=');
-  });
-
   it('labels each analysis status in Persian', () => {
     expect(render(<AnalysisStatusBadge status="ok" />)).toContain('تحلیل کامل');
     expect(render(<AnalysisStatusBadge status="insufficient_data" />)).toContain('داده ناکافی');
     expect(render(<AnalysisStatusBadge status="unavailable" />)).toContain('در دسترس نیست');
-  });
-
-  it('always marks demo data, never presenting it as live', () => {
-    expect(render(<DataModeBadge mode="demo" />)).toContain('دمو');
-    expect(render(<DataModeBadge mode="live" />)).toContain('داده واقعی');
-    expect(render(<DataModeBadge mode="live" />)).not.toContain('دمو');
   });
 
   it('renders arbitrary content with a tone', () => {

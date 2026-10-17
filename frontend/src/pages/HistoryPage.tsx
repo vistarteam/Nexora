@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ReportView } from '../components/analysis/ReportView';
-import { AnalysisStatusBadge, Badge, DataModeBadge } from '../components/ui/Badge';
+import { AnalysisStatusBadge, Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card, CardBody, CardHeader } from '../components/ui/Card';
 import { EmptyState, ErrorState, Skeleton, TableSkeleton } from '../components/ui/Feedback';
@@ -167,10 +167,7 @@ export function HistoryPage(): JSX.Element {
                             {TIMEFRAME_LABELS[item.timeframe]}
                           </td>
                           <td>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <AnalysisStatusBadge status={item.status} />
-                              <DataModeBadge mode={item.mode} />
-                            </div>
+                            <AnalysisStatusBadge status={item.status} />
                           </td>
                           <td className="text-2xs text-ink-muted">
                             {item.trendDirection

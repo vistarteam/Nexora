@@ -464,17 +464,17 @@ def _build_interpretation(facts: dict[str, Any], symbol: str, timeframe: str) ->
     elif volatility > 3:
         volatility_reading = (
             f"نوسان بازده‌ها (انحراف معیار ساده روی کل {candle_count} کندل) برابر "
-            f"{volatility} درصد است؛ در چنین شرایطی حد ضرر باید بازتر و حجم کوچک‌تر باشد."
+            f"{volatility:g} درصد است؛ در چنین شرایطی حد ضرر باید بازتر و حجم کوچک‌تر باشد."
         )
     elif volatility < 0.8:
         volatility_reading = (
             f"نوسان بازده‌ها (انحراف معیار ساده روی کل {candle_count} کندل) برابر "
-            f"{volatility} درصد است؛ بازار کم‌نوسان است."
+            f"{volatility:g} درصد است؛ بازار کم‌نوسان است."
         )
     else:
         volatility_reading = (
             f"نوسان بازده‌ها (انحراف معیار ساده روی کل {candle_count} کندل) برابر "
-            f"{volatility} درصد در محدوده متعارف این تایم‌فریم است."
+            f"{volatility:g} درصد در محدوده متعارف این تایم‌فریم است."
         )
 
     caveats = [
@@ -515,7 +515,7 @@ def _build_scenarios(facts: dict[str, Any]) -> list[dict[str, Any]]:
                 "title": "شکست مقاومت نزدیک",
                 "bias": "bullish",
                 "condition": (
-                    f"بسته‌شدن یک کندل بالای {nearest_resistance['price']} با حجم بالاتر از میانگین "
+                    f"بسته‌شدن یک کندل بالای {nearest_resistance['price']} "
                     "شرط اولیه این سناریو است."
                 ),
                 "invalidation": (

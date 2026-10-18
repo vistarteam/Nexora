@@ -220,7 +220,7 @@ describe('analyzeCandles', () => {
     const volatilityReading = result.interpretation?.volatilityReading ?? '';
     expect(volatilityReading).toContain('انحراف معیار ساده روی کل 300 کندل');
 
-    const volatilityLine = result.facts?.trend.evidence.find((line) =>
+    const volatilityLine = result.facts?.trend?.evidence?.find((line) =>
       line.includes('نوسان بازده‌ها'),
     );
     expect(volatilityLine).toBeTruthy();

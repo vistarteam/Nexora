@@ -216,7 +216,15 @@ export async function runPythonEngine(input: PythonEngineInput): Promise<EngineR
 }
 
 /**
- * Cheap availability probe: imports the package and prints its version.
+ * Cheap availability probe: runs the engine CLI itself with no stdin.
+ *
+ * The CLI answers empty stdin with a structured "unavailable" JSON that still
+ * carries its engine identity, so the probe exercises exactly the spawn path a
+ * real analysis uses (executable + cli.py + UTF-8 stdio). The previous probe
+ * ran `python -c "import nexora_analysis"`, which silently fails whenever the
+ * interpreter does not put the working directory on `sys.path` (e.g. Windows
+ * embeddable distributions) — it reported a healthy engine as unavailable and
+ * permanently skipped the parity test.
  * Cached for the process lifetime because it only answers "can we spawn it?".
  */
 let cachedProbe: Promise<{ ok: boolean; detail?: string }> | null = null;
@@ -228,16 +236,15 @@ export function probePythonEngine(force = false): Promise<{ ok: boolean; detail?
   cachedProbe = new Promise<{ ok: boolean; detail?: string }>((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(
-        config.analysisEngine.executable,
-        ['-c', 'import nexora_analysis as m; print(m.__version__)'],
-        {
-          cwd: config.analysisEngine.root,
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-        },
-      );
+      // No stdin: the CLI treats EOF as "empty payload" and prints its identity
+      // plus a structured unavailable status — the cheapest healthy reply it can
+      // give while still proving the real invocation path works.
+      child = spawn(config.analysisEngine.executable, [cliPath()], {
+        cwd: config.analysisEngine.root,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
     } catch (error) {
       resolve({ ok: false, detail: (error as Error).message });
       return;
@@ -274,8 +281,27 @@ export function probePythonEngine(force = false): Promise<{ ok: boolean; detail?
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (code === 0) resolve({ ok: true, detail: `nexora-analysis-engine ${stdout.trim()}` });
-      else resolve({ ok: false, detail: stderr.trim().slice(-300) || `exit code ${code}` });
+
+      if (code !== 0) {
+        resolve({ ok: false, detail: stderr.trim().slice(-300) || `exit code ${code}` });
+        return;
+      }
+
+      // A healthy CLI prints JSON that names the engine; anything else (a
+      // traceback, a partial write, a different program) means "unavailable".
+      try {
+        const parsed = JSON.parse(stdout.trim()) as { engine?: { name?: string; version?: string } };
+        if (parsed.engine?.name === 'nexora-analysis-engine') {
+          resolve({
+            ok: true,
+            detail: `nexora-analysis-engine ${parsed.engine.version ?? 'unknown'} (cli probe)`,
+          });
+        } else {
+          resolve({ ok: false, detail: 'cli probe did not identify the engine' });
+        }
+      } catch {
+        resolve({ ok: false, detail: stderr.trim().slice(-300) || 'cli probe output was not JSON' });
+      }
     });
   });
 

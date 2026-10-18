@@ -111,6 +111,7 @@ export function detectLevels(
   closes: number[],
   lookback = 5,
   maxLevels = 5,
+  times: number[] = [],
 ): DetectedLevels | null {
   if (closes.length < lookback * 2 + 3) return null;
 
@@ -147,13 +148,22 @@ export function detectLevels(
     merged.push({ price, touches: level.touches, kind: level.kind, lastIndex: level.lastIndex });
   }
 
-  const toLevel = (level: Cluster): SupportResistanceLevel => ({
+  const toLevel = (level: Cluster): SupportResistanceLevel => {
+    const type = level.price < lastPrice ? 'support' as const : 'resistance' as const;
+    const touchpoints = times.length === closes.length ? closes.flatMap((_, index) => {
+      const candlePrice = type === 'support' ? lows[index] as number : highs[index] as number;
+      if (Math.abs(candlePrice - level.price) > tolerance) return [];
+      return [{ time: times[index] as number, price: candlePrice, type, strength: Math.max(1, Math.min(5, level.touches)) }];
+    }) : [];
+    return ({
     price: level.price,
+    touchpoints,
     touches: level.touches,
     kind: level.kind,
     distancePercent:
       lastPrice === 0 ? 0 : ((level.price - lastPrice) / Math.abs(lastPrice)) * 100,
   });
+  };
 
   const supports = merged.filter((level) => level.price < lastPrice).map(toLevel);
   const resistances = merged.filter((level) => level.price > lastPrice).map(toLevel);

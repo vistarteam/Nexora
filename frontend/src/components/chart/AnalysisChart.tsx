@@ -68,6 +68,7 @@ export interface ChartLayers {
   sma: boolean;
   ema: boolean;
   levels: boolean;
+  touchpoints: boolean;
   swings: boolean;
   trend: boolean;
   volume: boolean;
@@ -79,6 +80,7 @@ export const DEFAULT_CHART_LAYERS: ChartLayers = {
   sma: false,
   ema: true,
   levels: true,
+  touchpoints: true,
   swings: true,
   trend: true,
   volume: true,
@@ -434,9 +436,18 @@ export function AnalysisChart({
     syncOverlays();
 
     markersRef.current?.setMarkers(
-      activeLayers.swings
-        ? buildSwingMarkers(payload, { bull: colors.bull, bear: colors.bear })
-        : [],
+      [
+        ...(activeLayers.swings ? buildSwingMarkers(payload, { bull: colors.bull, bear: colors.bear }) : []),
+        ...(activeLayers.touchpoints && payload.levels ? [...payload.levels.supports, ...payload.levels.resistances].flatMap((level) =>
+          (level.touchpoints ?? []).map((touch) => ({
+            time: toChartTime(touch.time),
+            position: touch.type === 'support' ? 'belowBar' as const : 'aboveBar' as const,
+            color: touch.type === 'support' ? colors.bull : colors.bear,
+            shape: 'circle' as const,
+            text: `برخورد ${touch.strength}/5`,
+          })),
+        ) : []),
+      ].sort((a, b) => Number(a.time) - Number(b.time)),
     );
 
     syncLevels();
@@ -810,6 +821,11 @@ export function AnalysisChart({
             label="سطوح"
             active={layers.levels}
             onClick={() => setLayers((current) => ({ ...current, levels: !current.levels }))}
+          />
+          <LayerToggle
+            label="نقاط برخورد"
+            active={layers.touchpoints}
+            onClick={() => setLayers((current) => ({ ...current, touchpoints: !current.touchpoints }))}
           />
           <LayerToggle
             label="نقاط چرخش"

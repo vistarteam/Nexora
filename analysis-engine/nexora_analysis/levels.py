@@ -122,6 +122,7 @@ def detect_levels(
     lookback: int = 5,
     max_levels: int = 5,
     atr_decimals: int = 6,
+    times: Optional[Sequence[int]] = None,
 ) -> Optional[dict]:
     """Full support/resistance detection for one candle series.
 
@@ -186,26 +187,22 @@ def detect_levels(
             return 0.0
         return ((price - last_price) / abs(last_price)) * 100.0
 
-    supports = [
-        {
-            "price": level["price"],
-            "touches": level["touches"],
-            "kind": level["kind"],
-            "distancePercent": distance_percent(level["price"]),
-        }
-        for level in merged
-        if level["price"] < last_price
-    ]
-    resistances = [
-        {
-            "price": level["price"],
-            "touches": level["touches"],
-            "kind": level["kind"],
-            "distancePercent": distance_percent(level["price"]),
-        }
-        for level in merged
-        if level["price"] > last_price
-    ]
+    def public_level(level: dict, level_type: str) -> dict:
+        touchpoints = []
+        if times is not None and len(times) == len(closes):
+            series = lows if level_type == "support" else highs
+            for index, raw_price in enumerate(series):
+                price = float(raw_price)
+                if abs(price - level["price"]) <= tolerance:
+                    touchpoints.append({"time": int(times[index]), "price": price,
+                                        "type": level_type,
+                                        "strength": max(1, min(5, int(level["touches"])))})
+        return {"price": level["price"], "touches": level["touches"],
+                "kind": level["kind"], "distancePercent": distance_percent(level["price"]),
+                "touchpoints": touchpoints}
+
+    supports = [public_level(level, "support") for level in merged if level["price"] < last_price]
+    resistances = [public_level(level, "resistance") for level in merged if level["price"] > last_price]
 
     # Nearest to the reference price first: the analysis surfaces levels by their
     # real distance from the current price, so the closest level on each side is

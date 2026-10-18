@@ -80,8 +80,11 @@ export interface MovingAverageSnapshot extends IndicatorSnapshot {
   period: number;
 }
 
+export interface LevelTouchpoint { time: number; price: number; type: 'support' | 'resistance'; strength: number; }
+
 export interface SupportResistanceLevel {
   price: number;
+  touchpoints?: LevelTouchpoint[];
   touches: number;
   distancePercent: number;
   kind: 'swing' | 'pivot';

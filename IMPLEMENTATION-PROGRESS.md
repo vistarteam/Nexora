@@ -171,3 +171,18 @@ Currently: Walk-forward validation and data persistence
 - **Anti-Pattern Avoided:** No "build ML first, figure out data later"
 - **Next Milestone:** First working forecast (baseline) on real data
 - **ETA for Demo:** 2 hours (forecast service + integration)
+
+## Follow-up upgrade: levels, touchpoints and risk planning (2026-10-18)
+
+- Added optional timestamped `touchpoints` metadata to the TypeScript and Python support/resistance outputs. The analysis engine passes candle timestamps into level detection; the frontend type contract now carries the same metadata.
+- `AnalysisChart` can render support/resistance touchpoints as coloured candle markers and exposes a toolbar toggle. Markers are sorted by chart time before being sent to Lightweight Charts.
+- Added `backend/src/services/strategy/riskSizing.ts`, a deterministic hypothetical sizing helper with explicit `no_trade` outcomes, risk cap validation, reward/risk threshold, fee/slippage estimates, and bounded suggested leverage.
+- Added `accountBalance`, `riskPercent`, and chart-layer preference fields to `SettingsContext` defaults so the UI can persist these preferences as part of the existing settings object.
+- Added `ScenariosPanel.tsx`, which derives bullish/base/bearish scenario values from the existing forecast return point and bounds, keeping values tied to the same forecast response.
+- Added unit tests for risk sizing and Python timestamped touchpoints.
+
+### Validation and remaining integration work
+
+- `python -m pytest analysis-engine/tests -q`: **70 passed**.
+- TypeScript/Vitest build was not run in this environment because dependencies are not installed here. Run `npm install` and `npm run verify` in the project's supported Windows environment before merging.
+- This update does **not** claim zero-lag parity with TradingView. The current live ticker remains sequential polling; no exchange WebSocket feed, venue-level reconciliation, or authenticated execution path was added. Chart scenario paths are currently a presentation component derived from forecast outputs and are not yet wired into a dedicated projected-time-series overlay. Account settings are stored, but the UI settings form still needs controls for editing them.

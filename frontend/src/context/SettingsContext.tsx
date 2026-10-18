@@ -30,6 +30,11 @@ export interface Settings {
   showCaveats: boolean;
   /** Denser rows in tables (mobile-friendly). */
   compactTables: boolean;
+  /** Account currency balance used only for hypothetical position sizing. */
+  accountBalance: number;
+  /** Maximum planned loss as a percent of account balance. */
+  riskPercent: number;
+  chartLayers: { supportResistance: boolean; touchpoints: boolean; forecasts: boolean; scenarios: boolean; indicators: boolean };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -41,6 +46,9 @@ export const DEFAULT_SETTINGS: Settings = {
   autoRunAnalysis: false,
   showCaveats: true,
   compactTables: false,
+  accountBalance: 1000,
+  riskPercent: 1,
+  chartLayers: { supportResistance: true, touchpoints: true, forecasts: true, scenarios: true, indicators: true },
 };
 
 interface SettingsContextValue {

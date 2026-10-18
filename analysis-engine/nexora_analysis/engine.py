@@ -291,7 +291,7 @@ def _build_facts(
 
     change = percent_change(closes[0], closes[-1])
     trend = classify_trend(highs, lows, closes, int(options["swingLookback"]))
-    levels = detect_levels(highs, lows, closes, int(options["swingLookback"]), int(options["maxLevels"]))
+    levels = detect_levels(highs, lows, closes, int(options["swingLookback"]), int(options["maxLevels"]), times=[int(c["time"]) for c in candles])
 
     return {
         "lastCandle": candles[-1],

@@ -185,8 +185,16 @@ export interface AnalysisFacts {
   } | null;
 }
 
+export interface LevelTouchpoint {
+  time: number;
+  price: number;
+  type: 'support' | 'resistance';
+  strength: number;
+}
+
 export interface SupportResistanceLevel {
   price: number;
+  touchpoints?: LevelTouchpoint[];
   /** Number of times price reacted at this level. */
   touches: number;
   /** Absolute distance from the last price, in percent. */

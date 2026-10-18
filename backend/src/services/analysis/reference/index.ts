@@ -235,7 +235,7 @@ function buildFacts(candles: Candle[], options: EngineOptions): AnalysisFacts {
 
   const change = percentChange(closes[0] as number, closes[closes.length - 1] as number);
   const trend = classifyTrend(highs, lows, closes, options.swingLookback);
-  const levels = detectLevels(highs, lows, closes, options.swingLookback, options.maxLevels);
+  const levels = detectLevels(highs, lows, closes, options.swingLookback, options.maxLevels, candles.map((candle) => candle.time));
 
   const round = (value: number, decimals: number): number =>
     Number(value.toFixed(decimals));

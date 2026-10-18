@@ -1,217 +1,39 @@
-/**
- * Main Forecasting Service.
- *
- * Wires together data layer, feature engineering, and baseline models into
- * a single forecast pipeline. Produces a complete ForecastResult per symbol
- * and horizon, with honest data-quality reporting when inputs are weak.
- */
-
+/** Forecast generation. Statistical intervals are explicitly approximations until
+ * out-of-sample calibration is run; they must not be marketed as calibrated. */
 import { randomUUID } from 'node:crypto';
 import type { Candle, Timeframe } from '../../types/domain.js';
-import type {
-  BaselineForecast,
-  BaselineModelType,
-  ForecastConfidence,
-  ForecastHorizon,
-  ForecastResult,
-  HorizonForecast,
-  MarketRegime,
-} from '../../types/forecasting.js';
+import type { BaselineForecast, BaselineModelType, ForecastConfidence, ForecastHorizon, ForecastResult, HorizonForecast, MarketRegime } from '../../types/forecasting.js';
 import { createLogger } from '../../lib/logger.js';
-import { extractFeatures } from './featureEngineering.js';
+import { extractFeatures, logReturns, std } from './featureEngineering.js';
 import { generateBaselineForecast } from './baselineModels.js';
-
 const log = createLogger('forecasting:service');
-
-/** Milliseconds per forecast horizon. */
-export const HORIZON_MS: Record<ForecastHorizon, number> = {
-  '15m': 15 * 60 * 1000,
-  '1h': 60 * 60 * 1000,
-  '4h': 4 * 60 * 60 * 1000,
-  '1d': 24 * 60 * 60 * 1000,
-};
-
-interface ForecastConfig {
-  symbol: string;
-  timeframe: Timeframe;
-  candles: Candle[];
-  horizons?: ForecastHorizon[];
-  baselineModel?: BaselineModelType;
-  version?: string;
+export const HORIZON_MS: Record<ForecastHorizon, number> = {'15m':900000,'1h':3600000,'4h':14400000,'1d':86400000};
+type CandleMeta = Candle & { isClosed?: boolean; ingestedAt?: number };
+interface ForecastConfig { symbol:string; timeframe:Timeframe; candles:Candle[]; horizons?:ForecastHorizon[]; baselineModel?:BaselineModelType; version?:string; asOfTime?:number }
+const TIMEFRAME_MS:Record<Timeframe,number>={'1m':60000,'5m':300000,'15m':900000,'1h':3600000,'4h':14400000,'1d':86400000,'1w':604800000};
+export function generateForecast(config:ForecastConfig):ForecastResult {
+ const {symbol,timeframe,horizons=['15m','1h','4h'],baselineModel='momentum',version='baseline-v0.2.0'}=config;
+ const now=config.asOfTime ?? Date.now();
+ const eligible=(config.candles as CandleMeta[]).filter(c=>c.time<=now && c.isClosed!==false && (c.ingestedAt===undefined||c.ingestedAt<=now)).sort((a,b)=>a.time-b.time);
+ const reference=eligible.at(-1); const referencePrice=reference?.close??0; const referenceTime=reference?.time??0;
+ const featureSet=extractFeatures({symbol,timeframe,candles:eligible,asOfTime:now});
+ const marketRegime=classifyRegime(featureSet.features); const dataQuality=featureSet.dataQuality;
+ const warnings:string[]=[];
+ if(dataQuality==='insufficient') warnings.push(`Insufficient data (${featureSet.candleCount} candles) for robust forecast`);
+ if(dataQuality==='degraded') warnings.push('Data quality is degraded; treat forecast with caution');
+ if(eligible.length!==config.candles.length) warnings.push('Excluded forming, future-dated, or not-yet-ingested candles.');
+ warnings.push('Probabilities and intervals are Gaussian approximations from historical returns, not calibrated probabilities; require walk-forward validation.');
+ const returns=logReturns(eligible.map(c=>c.close)); const sigmaPerBar=std(returns.slice(-Math.min(200,returns.length)))??0;
+ const forecasts:HorizonForecast[]=horizons.map(duration=>{
+  const baseline=generateBaselineForecast({model:baselineModel,symbol,timeframe,horizon:duration,candles:eligible});
+  const bars=Math.max(1,HORIZON_MS[duration]/TIMEFRAME_MS[timeframe]); const point=baseline.predictedReturn*bars; const sigma=sigmaPerBar*Math.sqrt(bars);
+  const threshold=0.001; const up=sigma>0?1-normalCdf((threshold-point)/sigma):(point>threshold?1:0); const down=sigma>0?normalCdf((-threshold-point)/sigma):(point< -threshold?1:0); const neutral=Math.max(0,Math.min(1,1-up-down));
+  return {duration,expiresAt:new Date(now+HORIZON_MS[duration]).toISOString(),expiresInMs:HORIZON_MS[duration],returnForecast:{point,lower:sigma>0?point-1.6448536269514722*sigma:null,upper:sigma>0?point+1.6448536269514722*sigma:null,coverage:0.9},directionProb:{up,down,neutral,threshold},marketRegime,confidence:deriveConfidence(dataQuality,point,sigma)};
+ });
+ const result:ForecastResult={id:randomUUID(),symbol,timeframe,generatedAt:new Date(now).toISOString(),generatedAtMs:now,referencePrice,referenceTime,horizons:forecasts,model:{id:baselineModel,version,description:`Baseline ${baselineModel}; uncalibrated statistical forecast`},features:featureSet.features,dataQuality,warnings};
+ log.info('Forecast generated',{symbol,timeframe,horizons:forecasts.length,regime:marketRegime,quality:dataQuality,referencePrice}); return result;
 }
-
-/**
- * Generate a complete probabilistic forecast for a symbol.
- *
- * Currently returns a baseline-driven forecast with uncertainty bounds and
- * market regime classification. ML models will slot in behind the same
- * interface once they are validated.
- */
-export function generateForecast(config: ForecastConfig): ForecastResult {
-  const {
-    symbol,
-    timeframe,
-    candles,
-    horizons = ['15m', '1h', '4h'],
-    baselineModel = 'momentum',
-    version = 'baseline-v0.1.0',
-  } = config;
-
-  const now = Date.now();
-  const generatedAtMs = now;
-  const generatedAt = new Date(now).toISOString();
-
-  // Reference price: last close of most recent complete candle
-  const referenceCandle = candles[candles.length - 1];
-  const referencePrice = referenceCandle?.close ?? 0;
-  const referenceTime = referenceCandle?.time ?? 0;
-
-  // Extract features for regime/quality classification
-  const featureSet = extractFeatures({
-    symbol,
-    timeframe,
-    candles,
-    asOfTime: referenceTime,
-  });
-
-  // Classify market regime from features
-  const marketRegime = classifyRegime(featureSet.features);
-  const dataQuality = featureSet.dataQuality;
-
-  const warnings: string[] = [];
-  if (dataQuality === 'insufficient') {
-    warnings.push(`Insufficient data (${featureSet.candleCount} candles) for robust forecast`);
-  }
-  if (dataQuality === 'degraded') {
-    warnings.push('Data quality is degraded; treat forecast with caution');
-  }
-
-  // Build per-horizon forecasts
-  const horizonForecasts: HorizonForecast[] = horizons.map((duration) => {
-    const expiresAtMs = generatedAtMs + HORIZON_MS[duration];
-    const baseline = generateBaselineForecast({
-      model: baselineModel,
-      symbol,
-      timeframe,
-      horizon: duration,
-      candles,
-    });
-
-    // Base confidence on data quality + volatility
-    const confidence = deriveConfidence(dataQuality, baseline);
-
-    return {
-      duration,
-      expiresAt: new Date(expiresAtMs).toISOString(),
-      expiresInMs: HORIZON_MS[duration],
-      returnForecast: {
-        point: baseline.predictedReturn,
-        lower: null,
-        upper: null,
-        coverage: 0.9, // Placeholder until interval calibration is implemented
-      },
-      directionProb: {
-        up: null,
-        down: null,
-        neutral: null,
-        threshold: 0.001,
-      },
-      marketRegime,
-      confidence,
-    };
-  });
-
-  const result: ForecastResult = {
-    id: randomUUID(),
-    symbol,
-    timeframe,
-    generatedAt,
-    generatedAtMs,
-    referencePrice,
-    referenceTime,
-    horizons: horizonForecasts,
-    model: {
-      id: baselineModel,
-      version,
-      description: `Baseline ${baselineModel} model`,
-    },
-    features: featureSet.features,
-    dataQuality,
-    warnings,
-  };
-
-  log.info('Forecast generated', {
-    symbol,
-    timeframe,
-    horizons: horizonForecasts.length,
-    regime: marketRegime,
-    quality: dataQuality,
-    referencePrice,
-  });
-
-  return result;
-}
-
-/**
- * Generate all baseline forecasts for comparison/debugging.
- */
-export function generateAllBaselineForecasts(params: {
-  symbol: string;
-  timeframe: Timeframe;
-  horizon: ForecastHorizon;
-  candles: Candle[];
-}): BaselineForecast[] {
-  const models: BaselineModelType[] = [
-    'zero',
-    'historical_mean',
-    'momentum',
-    'mean_reversion',
-    'last_return',
-  ];
-
-  return models.map((model) =>
-    generateBaselineForecast({
-      model,
-      ...params,
-    }),
-  );
-}
-
-/**
- * Classify current market regime from extracted features.
- */
-export function classifyRegime(features: Record<string, number | null>): MarketRegime {
-  const volRatio = features.return_std_ratio;
-  if (volRatio !== null && volRatio !== undefined && volRatio > 1.5) {
-    return 'high_volatility';
-  }
-
-  const distSma50 = features.distance_sma_50;
-  const distSma200 = features.distance_sma_200;
-
-  if (distSma50 === null || distSma50 === undefined) {
-    return 'unknown';
-  }
-
-  if (distSma50 > 0.01 && (distSma200 === null || distSma200 === undefined || distSma200 > -0.01)) {
-    return 'uptrend';
-  }
-  if (distSma50 < -0.01) {
-    return 'downtrend';
-  }
-  return 'range';
-}
-
-/**
- * Derive a forecast confidence level.
- */
-function deriveConfidence(dataQuality: 'good' | 'degraded' | 'insufficient', baseline: BaselineForecast): ForecastConfidence {
-  if (dataQuality === 'insufficient') return 'low';
-  if (dataQuality === 'degraded') return 'medium';
-
-  const absReturn = Math.abs(baseline.predictedReturn);
-  // High confidence only for strong signals on clean data
-  if (absReturn > 0.004) return 'high';
-  if (absReturn > 0.002) return 'medium';
-  return 'low';
-}
+export function generateAllBaselineForecasts(params:{symbol:string;timeframe:Timeframe;horizon:ForecastHorizon;candles:Candle[]}):BaselineForecast[]{return (['zero','historical_mean','momentum','mean_reversion','last_return'] as BaselineModelType[]).map(model=>generateBaselineForecast({model,...params}));}
+export function classifyRegime(f:Record<string,number|null>):MarketRegime {const v=f.return_std_ratio;if(v!=null&&v>1.5)return'high_volatility';const a=f.distance_sma_50,b=f.distance_sma_200;if(a==null)return'unknown';if(a>0.01&&(b==null||b>-0.01))return'uptrend';if(a< -0.01)return'downtrend';return'range';}
+function deriveConfidence(q:'good'|'degraded'|'insufficient',point:number,sigma:number):ForecastConfidence {if(q==='insufficient'||sigma===0)return'low';if(q==='degraded')return'medium';if(Math.abs(point)>sigma*1.5)return'high';if(Math.abs(point)>sigma*.5)return'medium';return'low';}
+function normalCdf(x:number):number {const z=Math.abs(x),t=1/(1+0.2316419*z),d=0.3989423*Math.exp(-z*z/2);const p=1-d*t*(0.3193815+t*(-0.3565638+t*(1.781478+t*(-1.821256+t*1.330274))));return x>=0?p:1-p;}

@@ -1,235 +1,52 @@
-/**
- * Feature Engineering for Nexora Predictive Engine.
- *
- * Extracts quantitative features from historical candles.
- * All features use ONLY data available at asOfTime (no future peeking).
+/** Point-in-time feature engineering. Features are computed only from candles
+ * whose open time and optional ingestion timestamp are <= asOfTime. A provider
+ * may explicitly mark a candle isClosed=false; such candles are always excluded.
  */
-
 import type { Candle, Timeframe } from '../../types/domain.js';
 import type { FeatureSet, DataQuality } from '../../types/forecasting.js';
-import { createLogger } from '../../lib/logger.js';
 
-const log = createLogger('forecasting:features');
-const FEATURE_VERSION = 'v1.0.0';
+const FEATURE_VERSION = 'v1.1.0';
+type CandleWithMetadata = Candle & { ingestedAt?: number; isClosed?: boolean };
 
-export function extractFeatures(params: {
-  symbol: string;
-  timeframe: Timeframe;
-  candles: Candle[];
-  asOfTime: number;
-}): FeatureSet {
-  const { symbol, timeframe, candles, asOfTime } = params;
-  const validCandles = candles.filter((c) => c.time <= asOfTime);
+export function extractFeatures(params: { symbol: string; timeframe: Timeframe; candles: Candle[]; asOfTime: number }): FeatureSet {
+  const { symbol, timeframe, asOfTime } = params;
+  const valid = (params.candles as CandleWithMetadata[])
+    .filter(c => Number.isFinite(c.time) && c.time <= asOfTime && (c.ingestedAt === undefined || c.ingestedAt <= asOfTime) && c.isClosed !== false)
+    .filter(c => [c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite) && c.close > 0 && c.low > 0 && c.high >= c.low)
+    .sort((a,b) => a.time - b.time);
+  const base = { asOfTime, symbol, timeframe, candleCount: valid.length, featureVersion: FEATURE_VERSION };
+  if (valid.length < 50) return { ...base, features: {}, dataQuality: 'insufficient' };
 
-  if (validCandles.length < 50) {
-    return {
-      asOfTime,
-      symbol,
-      timeframe,
-      candleCount: validCandles.length,
-      features: {},
-      featureVersion: FEATURE_VERSION,
-      dataQuality: 'insufficient',
-    };
-  }
-
-  const features: Record<string, number | null> = {};
-  const closes = validCandles.map((c) => c.close);
-  const highs = validCandles.map((c) => c.high);
-  const lows = validCandles.map((c) => c.low);
-  const volumes = validCandles.map((c) => c.volume);
-
-  // Returns & Momentum
-  const returns = computeReturns(closes);
-  features.return_1 = returns[returns.length - 1] ?? null;
-  features.return_5 = returns.length >= 5 ? mean(returns.slice(-5)) : null;
-  features.return_20 = returns.length >= 20 ? mean(returns.slice(-20)) : null;
-  features.return_std_20 = returns.length >= 20 ? std(returns.slice(-20)) : null;
-
-  const recentVol = returns.length >= 20 ? std(returns.slice(-20)) : null;
-  const longVol = returns.length >= 60 ? std(returns.slice(-60)) : null;
-  features.return_std_ratio = recentVol && longVol && longVol > 0 ? recentVol / longVol : null;
-
-  // Technical Indicators
-  features.sma_20 = closes.length >= 20 ? mean(closes.slice(-20)) : null;
-  features.sma_50 = closes.length >= 50 ? mean(closes.slice(-50)) : null;
-  features.sma_200 = closes.length >= 200 ? mean(closes.slice(-200)) : null;
-
-  const lastClose = closes[closes.length - 1];
-  if (!lastClose) {
-    return {
-      asOfTime,
-      symbol,
-      timeframe,
-      candleCount: validCandles.length,
-      features: {},
-      featureVersion: FEATURE_VERSION,
-      dataQuality: 'insufficient',
-    };
-  }
-  features.distance_sma_20 = features.sma_20 ? (lastClose - features.sma_20) / features.sma_20 : null;
-  features.distance_sma_50 = features.sma_50 ? (lastClose - features.sma_50) / features.sma_50 : null;
-  features.distance_sma_200 = features.sma_200 ? (lastClose - features.sma_200) / features.sma_200 : null;
-
-  features.rsi_14 = computeRSI(closes, 14);
-
-  const macdResult = computeMACD(closes);
-  features.macd = macdResult.macd;
-  features.macd_signal = macdResult.signal;
-  features.macd_hist = macdResult.histogram;
-
-  features.atr_14 = computeATR(highs, lows, closes, 14);
-  features.atr_ratio = features.atr_14 ? features.atr_14 / lastClose : null;
-
-  // Market Structure
-  const swings = findSwings(highs, lows, 5);
-  features.higher_highs = swings.higherHighs ? 1 : 0;
-  features.higher_lows = swings.higherLows ? 1 : 0;
-
-  const recentHigh = Math.max(...highs.slice(-20));
-  const recentLow = Math.min(...lows.slice(-20));
-  features.distance_to_high = (lastClose - recentHigh) / recentHigh;
-  features.distance_to_low = (lastClose - recentLow) / recentLow;
-
-  // Volume
-  const avgVolume = volumes.length >= 20 ? mean(volumes.slice(-20)) : null;
-  const lastVolume = volumes[volumes.length - 1];
-  features.volume_ratio = avgVolume && avgVolume > 0 && lastVolume !== undefined ? lastVolume / avgVolume : null;
-
-  let quality: DataQuality = 'good';
-  if (validCandles.length < 200) quality = 'degraded';
-  const nullCount = Object.values(features).filter((v) => v === null).length;
-  if (nullCount > Object.keys(features).length * 0.3) quality = 'degraded';
-
-  return {
-    asOfTime,
-    symbol,
-    timeframe,
-    candleCount: validCandles.length,
-    features,
-    featureVersion: FEATURE_VERSION,
-    dataQuality: quality,
-  };
+  const closes = valid.map(c=>c.close), highs=valid.map(c=>c.high), lows=valid.map(c=>c.low), volumes=valid.map(c=>c.volume);
+  const returns = logReturns(closes), f: Record<string, number|null> = {};
+  f.return_1 = last(returns);
+  f.return_5 = mean(returns.slice(-5)); f.return_20 = mean(returns.slice(-20));
+  f.return_std_20 = std(returns.slice(-20));
+  const rv20=std(returns.slice(-20)), rv60=std(returns.slice(-60));
+  f.return_std_ratio = rv20 !== null && rv60 !== null && rv60 > 0 ? rv20/rv60 : null;
+  for (const p of [20,50,200]) { const sma=closes.length>=p?mean(closes.slice(-p)):null; f[`sma_${p}`]=sma; f[`distance_sma_${p}`]=sma!==null?(closes.at(-1)!-sma)/sma:null; }
+  for (const p of [9,12,21,26,55]) f[`ema_${p}`]=ema(closes,p);
+  f.rsi_14=rsi(closes,14);
+  const macdSeries = closes.map((_,i)=>{ const a=ema(closes.slice(0,i+1),12), b=ema(closes.slice(0,i+1),26); return a!==null&&b!==null?a-b:null; });
+  const validMacd=macdSeries.filter((x):x is number=>x!==null);
+  const macd=last(validMacd), signal=ema(validMacd,9);
+  f.macd=macd; f.macd_signal=signal; f.macd_hist=macd!==null&&signal!==null?macd-signal:null;
+  f.atr_14=atr(highs,lows,closes,14); f.atr_ratio=f.atr_14!==null?f.atr_14/closes.at(-1)!:null;
+  const hh=highs.slice(-5), ph=highs.slice(-10,-5), hl=lows.slice(-5), pl=lows.slice(-10,-5);
+  f.higher_highs=hh.length===5&&ph.length===5&&Math.max(...hh)>Math.max(...ph)?1:0;
+  f.higher_lows=hl.length===5&&pl.length===5&&Math.min(...hl)>Math.min(...pl)?1:0;
+  const hi=Math.max(...highs.slice(-20)), lo=Math.min(...lows.slice(-20)), close=closes.at(-1)!;
+  f.distance_to_high=(close-hi)/hi; f.distance_to_low=(close-lo)/lo;
+  const av=mean(volumes.slice(-20)); f.volume_ratio=av!==null&&av>0?volumes.at(-1)!/av:null;
+  const nullCount=Object.values(f).filter(v=>v===null).length;
+  const dataQuality: DataQuality=valid.length<200||nullCount>Object.keys(f).length*0.3?'degraded':'good';
+  return { ...base, features:f, dataQuality };
 }
 
-function computeReturns(closes: number[]): number[] {
-  const returns: number[] = [];
-  for (let i = 1; i < closes.length; i++) {
-    const prev = closes[i - 1];
-    const curr = closes[i];
-    if (prev && prev > 0 && curr) {
-      returns.push(Math.log(curr / prev));
-    }
-  }
-  return returns;
-}
-
-function mean(values: number[]): number | null {
-  if (values.length === 0) return null;
-  return values.reduce((sum, v) => sum + v, 0) / values.length;
-}
-
-function std(values: number[]): number | null {
-  const m = mean(values);
-  if (m === null || values.length < 2) return null;
-  const variance = values.reduce((sum, v) => sum + Math.pow(v - m, 2), 0) / values.length;
-  return Math.sqrt(variance);
-}
-
-function computeRSI(closes: number[], period: number): number | null {
-  if (closes.length < period + 1) return null;
-  const changes: number[] = [];
-  for (let i = 1; i < closes.length; i++) {
-    const curr = closes[i];
-    const prev = closes[i - 1];
-    if (curr !== undefined && prev !== undefined) {
-      changes.push(curr - prev);
-    }
-  }
-
-  let avgGain = 0, avgLoss = 0;
-  for (let i = 0; i < period; i++) {
-    const change = changes[i];
-    if (change !== undefined) {
-      if (change > 0) avgGain += change;
-      else avgLoss += Math.abs(change);
-    }
-  }
-  avgGain /= period;
-  avgLoss /= period;
-
-  for (let i = period; i < changes.length; i++) {
-    const change = changes[i];
-    if (change !== undefined) {
-      if (change > 0) {
-        avgGain = (avgGain * (period - 1) + change) / period;
-        avgLoss = (avgLoss * (period - 1)) / period;
-      } else {
-        avgGain = (avgGain * (period - 1)) / period;
-        avgLoss = (avgLoss * (period - 1) + Math.abs(change)) / period;
-      }
-    }
-  }
-
-  if (avgLoss === 0) return 100;
-  return 100 - 100 / (1 + avgGain / avgLoss);
-}
-
-function computeMACD(closes: number[]): { macd: number | null; signal: number | null; histogram: number | null } {
-  if (closes.length < 26) return { macd: null, signal: null, histogram: null };
-  const ema12 = computeEMA(closes, 12);
-  const ema26 = computeEMA(closes, 26);
-  if (ema12 === null || ema26 === null) return { macd: null, signal: null, histogram: null };
-  const macd = ema12 - ema26;
-  const signal = null; // Simplified: would need EMA of MACD line
-  return { macd, signal, histogram: null };
-}
-
-function computeEMA(values: number[], period: number): number | null {
-  if (values.length < period) return null;
-  const multiplier = 2 / (period + 1);
-  let ema = mean(values.slice(0, period));
-  if (ema === null) return null;
-  for (let i = period; i < values.length; i++) {
-    const value = values[i];
-    if (value !== undefined) {
-      ema = (value - ema) * multiplier + ema;
-    }
-  }
-  return ema;
-}
-
-function computeATR(highs: number[], lows: number[], closes: number[], period: number): number | null {
-  if (highs.length < period + 1) return null;
-  const tr: number[] = [];
-  for (let i = 1; i < highs.length; i++) {
-    const high = highs[i];
-    const low = lows[i];
-    const prevClose = closes[i - 1];
-    if (high !== undefined && low !== undefined && prevClose !== undefined) {
-      tr.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
-    }
-  }
-  let atr = mean(tr.slice(0, period));
-  if (atr === null) return null;
-  for (let i = period; i < tr.length; i++) {
-    const trVal = tr[i];
-    if (trVal !== undefined) {
-      atr = (atr * (period - 1) + trVal) / period;
-    }
-  }
-  return atr;
-}
-
-function findSwings(highs: number[], lows: number[], lookback: number): { higherHighs: boolean; higherLows: boolean } {
-  if (highs.length < lookback * 2) return { higherHighs: false, higherLows: false };
-  const recentHighs = highs.slice(-lookback);
-  const priorHighs = highs.slice(-lookback * 2, -lookback);
-  const recentLows = lows.slice(-lookback);
-  const priorLows = lows.slice(-lookback * 2, -lookback);
-  return {
-    higherHighs: Math.max(...recentHighs) > Math.max(...priorHighs),
-    higherLows: Math.min(...recentLows) > Math.min(...priorLows),
-  };
-}
-
+export function logReturns(closes:number[]):number[] { const out:number[]=[]; for(let i=1;i<closes.length;i++){const a=closes[i-1]!,b=closes[i]!;out.push(a>0&&b>0?Math.log(b/a):0);} return out; }
+export function mean(xs:number[]):number|null { return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null; }
+export function std(xs:number[]):number|null { if(xs.length<2)return null; const m=mean(xs)!; return Math.sqrt(xs.reduce((s,x)=>s+(x-m)**2,0)/xs.length); }
+export function ema(xs:number[],period:number):number|null { if(xs.length<period)return null; let v=mean(xs.slice(0,period))!; const k=2/(period+1); for(let i=period;i<xs.length;i++)v=xs[i]!*k+v*(1-k); return v; }
+export function rsi(xs:number[],period=14):number|null { if(xs.length<period+1)return null; let g=0,l=0; for(let i=1;i<=period;i++){const d=xs[i]!-xs[i-1]!;g+=Math.max(d,0);l+=Math.max(-d,0);} g/=period;l/=period; for(let i=period+1;i<xs.length;i++){const d=xs[i]!-xs[i-1]!;g=(g*(period-1)+Math.max(d,0))/period;l=(l*(period-1)+Math.max(-d,0))/period;} return l===0?100:100-100/(1+g/l); }
+export function atr(highs:number[],lows:number[],closes:number[],period=14):number|null { if(closes.length<period+1)return null; const tr:number[]=[]; for(let i=1;i<closes.length;i++)tr.push(Math.max(highs[i]!-lows[i]!,Math.abs(highs[i]!-closes[i-1]!),Math.abs(lows[i]!-closes[i-1]!))); let v=mean(tr.slice(0,period)); if(v===null)return null; for(let i=period;i<tr.length;i++)v=(v*(period-1)+tr[i]!)/period; return v; }
+function last(xs:number[]):number|null{return xs.length?xs[xs.length-1]!:null;}

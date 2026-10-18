@@ -95,7 +95,7 @@ describe('featureEngineering', () => {
     expect(featureSet.features.rsi_14).not.toBeNull();
     expect(featureSet.features.sma_20).not.toBeNull();
     expect(featureSet.features.distance_sma_200).not.toBeNull();
-    expect(featureSet.featureVersion).toBe('v1.0.0');
+    expect(featureSet.featureVersion).toBe('v1.1.0');
   });
 
   it('returns insufficient quality for too little data', () => {
@@ -198,3 +198,35 @@ describe('forecastService', () => {
   });
 });
 
+
+describe('forecasting safety and probability outputs', () => {
+  it('excludes forming candles and candles ingested after the as-of time', () => {
+    const candles = makeCandles(80) as (Candle & { isClosed?: boolean; ingestedAt?: number })[];
+    const cutoff = candles[69]!.time;
+    candles[10]!.ingestedAt = cutoff + 1;
+    candles[69]!.isClosed = false;
+    const features = extractFeatures({ symbol: 'BTCUSDT', timeframe: '1h', candles, asOfTime: cutoff });
+    expect(features.candleCount).toBe(68);
+    expect(features.features.return_1).not.toBeNull();
+  });
+
+  it('does not change point-in-time features when future candles are appended', () => {
+    const candles = makeCandles(100);
+    const cutoff = candles[79]!.time;
+    const a = extractFeatures({ symbol: 'BTCUSDT', timeframe: '1h', candles: candles.slice(0, 80), asOfTime: cutoff });
+    const b = extractFeatures({ symbol: 'BTCUSDT', timeframe: '1h', candles, asOfTime: cutoff });
+    expect(b.features).toEqual(a.features);
+  });
+
+  it('returns bounded directional probabilities and uncertainty interval when volatility exists', () => {
+    const candles = makeCandles(300);
+    const forecast = generateForecast({ symbol: 'BTCUSDT', timeframe: '1h', candles, horizons: ['15m', '1h', '4h'] });
+    for (const h of forecast.horizons) {
+      expect(h.directionProb.up).toBeGreaterThanOrEqual(0);
+      expect(h.directionProb.up).toBeLessThanOrEqual(1);
+      expect((h.directionProb.up ?? 0) + (h.directionProb.down ?? 0) + (h.directionProb.neutral ?? 0)).toBeCloseTo(1, 2);
+      expect(h.returnForecast.point).not.toBeNull();
+    }
+    expect(forecast.warnings.some(w => w.includes('not calibrated'))).toBe(true);
+  });
+});

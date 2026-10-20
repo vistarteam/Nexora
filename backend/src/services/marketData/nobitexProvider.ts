@@ -8,7 +8,9 @@ import {
   sanitizeCandles,
   type CandleRequest,
   type MarketDataProvider,
+  type TickerStreamHandlers,
 } from './types.js';
+import { NOBITEX_STREAM_RESOLUTION, NobitexTickerStream } from './streams.js';
 
 const log = createLogger('market-data:nobitex');
 
@@ -84,6 +86,11 @@ export class NobitexMarketDataProvider implements MarketDataProvider {
       'https://apiv2.nobitex.ir'
     ).replace(/\/+$/, '');
     this.now = options.now ?? (() => Date.now());
+  }
+
+  /** Native ticker for the provider's public endpoints (REST and WebSocket). */
+  nativeTicker(symbol: string): string {
+    return this.toNobitexSymbol(symbol);
   }
 
   private toNobitexSymbol(symbol: string): string {
@@ -251,6 +258,38 @@ export class NobitexMarketDataProvider implements MarketDataProvider {
       );
     }
     return record;
+  }
+
+  /**
+   * Public trade/candle stream. Weekly candles are not published by the
+   * documented candle channel, so `1w` deliberately falls back to REST.
+   */
+  subscribeTicker(
+    request: Omit<CandleRequest, 'limit'>,
+    handlers: TickerStreamHandlers,
+  ): () => void {
+    if (!config.marketData.streamEnabled) {
+      handlers.onStatus('disconnected', 'streams disabled by configuration');
+      return () => undefined;
+    }
+    if (!NOBITEX_STREAM_RESOLUTION[request.timeframe]) {
+      handlers.onStatus('disconnected', 'no documented weekly stream; using REST');
+      return () => undefined;
+    }
+    let stream: NobitexTickerStream | null = null;
+    try {
+      stream = new NobitexTickerStream({
+        symbol: request.symbol,
+        timeframe: request.timeframe,
+        nativeTicker: this.toNobitexSymbol(request.symbol),
+        handlers,
+      });
+      stream.start();
+    } catch (error) {
+      handlers.onStatus('disconnected', (error as Error).message);
+      return () => undefined;
+    }
+    return () => stream?.close();
   }
 
   async health(): Promise<{ ok: boolean; detail?: string }> {

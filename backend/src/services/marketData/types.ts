@@ -1,5 +1,42 @@
 import type { AssetClass, Candle, CandleSeries, DataMode, Timeframe } from '../../types/domain.js';
 
+/** One validated push from a provider's public market-data stream. */
+export interface TickerTick {
+  /** Canonical NEXORA symbol (never the provider's native ticker). */
+  symbol: string;
+  timeframe: Timeframe;
+  /** Null for a trade-only frame; the service folds the price into its bar. */
+  candle: Candle | null;
+  /** Last trade price when the stream carries trades; otherwise candle close. */
+  price: number;
+  /** What `price` means; never inferred by the consumer. */
+  priceDefinition: 'last_trade' | 'forming_candle_close';
+  /** Exchange event time in epoch ms, when the message supplies one. */
+  eventTime: number | null;
+  /**
+   * Size of the single trade that produced a trade-only tick.
+   *
+   * Candle frames already carry cumulative bar volume, so this is only set for
+   * trade frames and is what lets the service keep the forming bar's volume
+   * meaningful after a period rolls over.
+   */
+  tradeVolume?: number;
+  /** When this process parsed the message. */
+  receivedAt: number;
+  /** Provider stream identifier, for diagnostics. */
+  streamId: string;
+  /** Venue that published the tick (e.g. `nobitex`), when the adapter knows it. */
+  venue?: string;
+}
+
+export type TickerStreamStatus = 'connecting' | 'connected' | 'disconnected';
+
+/** Callbacks a provider must drive when it implements `subscribeTicker`. */
+export interface TickerStreamHandlers {
+  onTick(tick: TickerTick): void;
+  onStatus(status: TickerStreamStatus, detail?: string): void;
+}
+
 export interface CandleRequest {
   /** Canonical NEXORA symbol, e.g. `BINANCE:BTCUSDT`. */
   symbol: string;
@@ -30,6 +67,18 @@ export interface MarketDataProvider {
   readonly supports: readonly AssetClass[];
   fetchCandles(request: CandleRequest): Promise<CandleSeries>;
   health(): Promise<{ ok: boolean; detail?: string }>;
+  /**
+   * Optional public market-data stream. Providers that can push validated
+   * ticks implement this; everyone else omits it and the service falls back to
+   * REST polling, which is reported honestly as `rest-polling`.
+   *
+   * The returned function must close the underlying socket and remove every
+   * listener. It is safe to call more than once.
+   */
+  subscribeTicker?(
+    request: Omit<CandleRequest, 'limit'>,
+    handlers: TickerStreamHandlers,
+  ): () => void;
 }
 
 /**

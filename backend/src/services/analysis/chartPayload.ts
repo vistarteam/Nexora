@@ -196,6 +196,10 @@ export function buildChartPayload(args: BuildChartPayloadArgs): ChartPayload {
           nearestResistance: facts.levels.nearestResistance,
         }
       : null,
+    zones: facts?.zones ?? null,
+    structure: facts?.structure ?? null,
+    trendlines: facts?.trendlines ?? [],
+    projection: result.projection ?? null,
     swings: engineSeries ? buildSwings(engineSeries, candles) : null,
     trend: facts?.trend
       ? {

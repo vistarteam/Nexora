@@ -24,6 +24,8 @@ from typing import Any, Iterable, Optional
 from .indicators import atr, ema, macd, percent_change, rsi, sma, stdev
 from .levels import detect_levels, find_swings
 from .trend import classify_trend, regression_line
+from .structure import analyze_market_structure, build_projection, detect_trendlines
+from .zones import detect_zones_from_candles
 
 ENGINE_ID = "python"
 ENGINE_NAME = "nexora-analysis-engine"
@@ -262,6 +264,7 @@ def _ma_snapshot(closes: list[float], periods: Iterable[int], method: str) -> li
 def _build_facts(
     candles: list[dict[str, float]],
     options: dict[str, Any],
+    timeframe: str,
 ) -> dict[str, Any]:
     closes = [candle["close"] for candle in candles]
     highs = [candle["high"] for candle in candles]
@@ -292,6 +295,14 @@ def _build_facts(
     change = percent_change(closes[0], closes[-1])
     trend = classify_trend(highs, lows, closes, int(options["swingLookback"]))
     levels = detect_levels(highs, lows, closes, int(options["swingLookback"]), int(options["maxLevels"]), times=[int(c["time"]) for c in candles])
+    zones = detect_zones_from_candles(
+        candles,
+        timeframe=timeframe,
+        swing_lookback=int(options["swingLookback"]),
+        max_zones=max(4, int(options["maxLevels"])) + 1,
+    )
+    structure = analyze_market_structure(candles, int(options["swingLookback"]))
+    trendlines = detect_trendlines(candles, int(options["swingLookback"]))
 
     return {
         "lastCandle": candles[-1],
@@ -329,6 +340,9 @@ def _build_facts(
             "higherLows": trend["higherLows"],
         },
         "levels": levels,
+        "zones": zones,
+        "structure": structure,
+        "trendlines": trendlines,
         # Internal, stripped before the result leaves `analyze()`.
         "_meta": {"slopePercentPerCandle": trend.get("slopePercentPerCandle")},
     }
@@ -498,44 +512,54 @@ def _build_interpretation(facts: dict[str, Any], symbol: str, timeframe: str) ->
 
 def _build_scenarios(facts: dict[str, Any]) -> list[dict[str, Any]]:
     levels = facts.get("levels") or {}
+    zones = facts.get("zones") or {}
     trend = facts.get("trend") or {}
     last_close = facts["lastCandle"]["close"]
-    nearest_support = levels.get("nearestSupport")
-    nearest_resistance = levels.get("nearestResistance")
+    # Zones are the primary model; legacy single levels are only a fallback.
+    nearest_support = zones.get("nearestSupport") or levels.get("nearestSupport")
+    nearest_resistance = zones.get("nearestResistance") or levels.get("nearestResistance")
     direction = str(trend.get("direction", "unknown"))
     strength = trend.get("strength") or 0
 
     confidence = "high" if strength >= 60 else "medium" if strength >= 30 else "low"
     scenarios: list[dict[str, Any]] = []
 
+    def zone_upper(zone: dict[str, Any]) -> Any:
+        return zone.get("zoneHigh", zone.get("price"))
+
+    def zone_lower(zone: dict[str, Any]) -> Any:
+        return zone.get("zoneLow", zone.get("price"))
+
     if nearest_resistance:
+        level = zone_upper(nearest_resistance)
         scenarios.append(
             {
                 "id": "breakout-up",
                 "title": "شکست مقاومت نزدیک",
                 "bias": "bullish",
                 "condition": (
-                    f"بسته‌شدن یک کندل بالای {nearest_resistance['price']} "
+                    f"بسته‌شدن یک کندل بالای سقف ناحیه مقاومت {level} "
                     "شرط اولیه این سناریو است."
                 ),
                 "invalidation": (
-                    f"بازگشت قیمت به زیر {nearest_resistance['price']} و تثبیت زیر آن، این سناریو را بی‌اعتبار می‌کند."
+                    f"بازگشت قیمت به زیر {level} و تثبیت زیر آن، این سناریو را بی‌اعتبار می‌کند."
                 ),
                 "confidence": confidence,
             }
         )
 
     if nearest_support:
+        level = zone_lower(nearest_support)
         scenarios.append(
             {
                 "id": "breakdown-down",
                 "title": "شکست حمایت نزدیک",
                 "bias": "bearish",
                 "condition": (
-                    f"بسته‌شدن یک کندل زیر {nearest_support['price']} سناریوی ادامه نزول را فعال می‌کند."
+                    f"بسته‌شدن یک کندل زیر کف ناحیه حمایت {level} سناریوی ادامه نزول را فعال می‌کند."
                 ),
                 "invalidation": (
-                    f"بازگشت و تثبیت قیمت بالای {nearest_support['price']} این سناریو را بی‌اعتبار می‌کند."
+                    f"بازگشت و تثبیت قیمت بالای {level} این سناریو را بی‌اعتبار می‌کند."
                 ),
                 "confidence": confidence,
             }
@@ -596,6 +620,7 @@ def analyze(payload: Any) -> dict[str, Any]:
                 "facts": None,
                 "interpretation": None,
                 "scenarios": [],
+                "projection": None,
                 "series": None,
                 "reason": (
                     f"برای تحلیل حداقل {MINIMUM_CANDLES} کندل معتبر لازم است "
@@ -612,6 +637,7 @@ def analyze(payload: Any) -> dict[str, Any]:
                 "facts": None,
                 "interpretation": None,
                 "scenarios": [],
+                "projection": None,
                 "series": None,
                 "reason": (
                     f"این مجموعه اندیکاتورها به {required} کندل نیاز دارد "
@@ -621,10 +647,18 @@ def analyze(payload: Any) -> dict[str, Any]:
         )
         return base
 
-    facts = _build_facts(candles, options)
+    facts = _build_facts(candles, options, timeframe)
     interpretation = _build_interpretation(facts, symbol, timeframe)
     # `_meta` is plumbing used while composing the narrative, not a fact.
     facts.pop("_meta", None)
+
+    projection = build_projection(
+        candles,
+        timeframe=timeframe,
+        structure=facts.get("structure") or {},
+        zones=facts.get("zones"),
+        trendlines=facts.get("trendlines") or [],
+    )
 
     base.update(
         {
@@ -632,6 +666,7 @@ def analyze(payload: Any) -> dict[str, Any]:
             "facts": facts,
             "interpretation": interpretation,
             "scenarios": _build_scenarios(facts),
+            "projection": projection,
             "series": _build_series(candles, options) if options.get("includeSeries") else None,
             "reason": None,
         }

@@ -86,6 +86,9 @@ function coerceResult(parsed: unknown): EngineRunResult {
       ? (parsed.interpretation as unknown as EngineRunResult['interpretation'])
       : null,
     scenarios: scenarios as EngineRunResult['scenarios'],
+    projection: isRecord(parsed.projection)
+      ? (parsed.projection as unknown as EngineRunResult['projection'])
+      : null,
     series,
     warnings,
     reason: typeof parsed.reason === 'string' ? parsed.reason : null,

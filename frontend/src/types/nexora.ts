@@ -53,6 +53,24 @@ export interface CandleSeries {
  * `candleCloseTime` come from the same venue the analysis used, so the animated
  * bar is the very bar the engine last analysed.
  */
+export type TickerTransport = 'websocket' | 'rest-polling';
+export type PriceDefinition = 'last_trade' | 'forming_candle_close' | 'last_completed_candle_close';
+
+export interface TickerFreshness {
+  transport: TickerTransport;
+  venue: string;
+  priceDefinition: PriceDefinition;
+  eventTime: number | null;
+  receivedAt: number;
+  lastRestSyncAt: number | null;
+  connection: 'connected' | 'connecting' | 'disconnected' | 'polling';
+  ageMs: number;
+  staleAfterMs: number;
+  isStale: boolean;
+  lastError: string | null;
+  warnings: string[];
+}
+
 export interface TickerSnapshot {
   symbol: string;
   tvSymbol: string;
@@ -68,6 +86,7 @@ export interface TickerSnapshot {
   dataSource: string;
   mode: DataMode;
   fetchedAt: string;
+  freshness: TickerFreshness;
 }
 
 export interface IndicatorSnapshot {
@@ -84,10 +103,146 @@ export interface LevelTouchpoint { time: number; price: number; type: 'support' 
 
 export interface SupportResistanceLevel {
   price: number;
+  /** Internal engine evidence. No longer rendered as individual chart dots. */
   touchpoints?: LevelTouchpoint[];
   touches: number;
   distancePercent: number;
   kind: 'swing' | 'pivot';
+}
+
+export type ZoneRole = 'support' | 'resistance' | 'both';
+export type ZoneStatus = 'active' | 'provisional' | 'broken';
+
+export interface ZoneConfluence {
+  timeframe: string;
+  zoneLow: number;
+  zoneHigh: number;
+  overlapRatio: number;
+}
+
+export interface PriceZone {
+  id: string;
+  role: ZoneRole;
+  status: ZoneStatus;
+  zoneLow: number;
+  zoneHigh: number;
+  midpoint: number;
+  width: number;
+  widthPercent: number;
+  distancePercent: number;
+  /** Heuristic 0-100 ranking. Never a probability. */
+  strength: number;
+  strengthMeaning: 'heuristic_0_100';
+  methods: string[];
+  confluenceCount: number;
+  reactionCount: number;
+  reactionTimes: number[];
+  firstTouchTime: number;
+  lastTouchTime: number;
+  sourceTimeframe: string;
+  confluence: ZoneConfluence[];
+  evidence: string[];
+  warnings: string[];
+}
+
+export interface HigherTimeframeZones {
+  timeframe: string;
+  candleCount: number;
+  zones: PriceZone[];
+}
+
+export interface ZoneSet {
+  zones: PriceZone[];
+  supports: PriceZone[];
+  resistances: PriceZone[];
+  nearestSupport: PriceZone | null;
+  nearestResistance: PriceZone | null;
+  referencePrice: number;
+  referenceTime: number;
+  higherTimeframeZones: HigherTimeframeZones[];
+  method: {
+    version: string;
+    atrPeriod: number;
+    swingLookback: number;
+    clusterToleranceAtr: number;
+    minWidthAtr: number;
+    maxWidthAtr: number;
+    breakBufferAtr: number;
+    breakConfirmCloses: number;
+    minReactions: number;
+  };
+  warnings: string[];
+}
+
+export interface ConfirmedSwing {
+  time: number;
+  price: number;
+  index: number;
+  confirmedAtTime: number;
+  rejection: number;
+}
+
+export interface StructureEvent {
+  type: 'bos' | 'choch';
+  direction: 'bullish' | 'bearish';
+  level: number;
+  close: number;
+  time: number;
+  atrMultiple: number;
+}
+
+export interface MarketStructure {
+  direction: 'bullish' | 'bearish' | 'ranging' | 'unknown';
+  swings: { highs: ConfirmedSwing[]; lows: ConfirmedSwing[] };
+  events: StructureEvent[];
+  lastEvent: StructureEvent | null;
+  rules: { confirmationBars: number; breakBufferAtr: number };
+  evidence: string[];
+  warnings: string[];
+}
+
+export interface TrendLine {
+  id: string;
+  kind: 'rising_support' | 'falling_resistance';
+  status: 'active' | 'provisional' | 'broken';
+  anchors: Array<{ time: number; price: number; index: number; confirmedAtTime: number }>;
+  slopePerBar: number;
+  rSquared: number | null;
+  touches: number;
+  toleranceAtr: number;
+  endPoint: ChartPoint;
+  evidence: string[];
+  warnings: string[];
+}
+
+export interface ProjectionScenario {
+  id: 'bullish' | 'base' | 'bearish';
+  name: string;
+  activation: string;
+  invalidation: string;
+  direction: 'up' | 'down' | 'sideways';
+  targetLow: number | null;
+  targetHigh: number | null;
+  projectedPath: ChartPoint[];
+  bandLow: ChartPoint[];
+  bandHigh: ChartPoint[];
+  confidence: 'low' | 'medium' | 'high';
+  confidenceMeaning: string;
+  evidence: string[];
+  dataQualityWarnings: string[];
+}
+
+export interface MarketProjection {
+  experimental: boolean;
+  method: string;
+  version: string;
+  referenceTime: number;
+  referencePrice: number;
+  horizonBars: number;
+  horizonEndsAt: number;
+  atr: number | null;
+  scenarios: ProjectionScenario[];
+  warnings: string[];
 }
 
 export interface AnalysisFacts {
@@ -123,6 +278,9 @@ export interface AnalysisFacts {
     nearestSupport: SupportResistanceLevel | null;
     nearestResistance: SupportResistanceLevel | null;
   } | null;
+  zones?: ZoneSet | null;
+  structure?: MarketStructure | null;
+  trendlines?: TrendLine[] | null;
 }
 
 export interface AnalysisInterpretation {
@@ -158,6 +316,8 @@ export interface AnalysisReport {
   facts: AnalysisFacts | null;
   interpretation: AnalysisInterpretation | null;
   scenarios: AnalysisScenario[];
+  /** Optional for backward compatibility with reports saved before projections. */
+  projection?: MarketProjection | null;
   warnings: string[];
   disclaimer: string;
 }
@@ -225,6 +385,10 @@ export interface ChartPayload {
     nearestSupport: SupportResistanceLevel | null;
     nearestResistance: SupportResistanceLevel | null;
   } | null;
+  zones: ZoneSet | null;
+  structure: MarketStructure | null;
+  trendlines: TrendLine[];
+  projection: MarketProjection | null;
   swings: { highs: ChartPoint[]; lows: ChartPoint[] } | null;
   trend: {
     direction: string;

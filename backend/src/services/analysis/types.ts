@@ -4,6 +4,7 @@ import type {
   AnalysisScenario,
   AnalysisStatus,
   EngineId,
+  MarketProjection,
 } from '../../types/domain.js';
 
 /**
@@ -21,6 +22,8 @@ export interface EngineRunResult {
   facts: AnalysisFacts | null;
   interpretation: AnalysisInterpretation | null;
   scenarios: AnalysisScenario[];
+  /** Experimental conditional projection, when the data supports one. */
+  projection?: MarketProjection | null;
   /** Chart-renderable indicator series; `null` unless `includeSeries` was set. */
   series: EngineSeries | null;
   warnings: string[];

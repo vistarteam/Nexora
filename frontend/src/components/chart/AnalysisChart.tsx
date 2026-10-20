@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   CandlestickSeries,
   ColorType,
@@ -20,9 +20,10 @@ import {
 } from 'lightweight-charts';
 import { useFormat, useSettings } from '../../context/SettingsContext';
 import {
-  buildLevelLines,
   buildSwingMarkers,
   buildTrendLine,
+  buildTrendLinePaths,
+  buildProjectionPaths,
   createDrawingId,
   hasVolume,
   loadDrawings,
@@ -32,6 +33,7 @@ import {
   toChartTime,
   toHistogramData,
   toLineData,
+  visibleZones,
   windowChangePercent,
 } from '../../lib/chart';
 import { cn } from '../../lib/cn';
@@ -42,6 +44,7 @@ import type {
   ChartDrawing,
   ChartPayload,
   ChartPoint,
+  PriceZone,
   TickerSnapshot,
 } from '../../types/nexora';
 import { Button } from '../ui/Button';
@@ -67,10 +70,17 @@ import { RefreshIcon } from '../ui/Icons';
 export interface ChartLayers {
   sma: boolean;
   ema: boolean;
-  levels: boolean;
-  touchpoints: boolean;
+  /** Shaded support zones. */
+  supportZones: boolean;
+  /** Shaded resistance zones. */
+  resistanceZones: boolean;
+  /** Price-range labels on zones. Independent from the fills. */
+  zoneLabels: boolean;
+  /** Structural trend lines (rising support / falling resistance). */
+  trendlines: boolean;
   swings: boolean;
-  trend: boolean;
+  /** Conditional future paths. Off by default because they are experimental. */
+  projection: boolean;
   volume: boolean;
   rsi: boolean;
   macd: boolean;
@@ -79,14 +89,24 @@ export interface ChartLayers {
 export const DEFAULT_CHART_LAYERS: ChartLayers = {
   sma: false,
   ema: true,
-  levels: true,
-  touchpoints: true,
-  swings: true,
-  trend: true,
+  supportZones: true,
+  resistanceZones: true,
+  zoneLabels: true,
+  trendlines: true,
+  swings: false,
+  projection: false,
   volume: true,
   rsi: true,
   macd: true,
 };
+
+interface ZoneBox {
+  zone: PriceZone;
+  x1: number;
+  x2: number;
+  y1: number;
+  y2: number;
+}
 
 type DrawingTool = 'none' | 'hline' | 'trend';
 
@@ -101,6 +121,8 @@ export interface LiveChartFeed {
   snapshot: TickerSnapshot | null;
   secondsToClose: number | null;
   stale?: boolean;
+  /** Why the tape is stale, shown verbatim next to the dot. */
+  reason?: string | null;
 }
 
 export interface AnalysisChartProps {
@@ -160,6 +182,17 @@ const PALETTES: Record<'dark' | 'light', Palette> = {
   },
 };
 
+/** `#rrggbb` + alpha → `rgba(...)`, for canvas fills that match the chart tokens. */
+function withAlpha(hex: string, alpha: number): string {
+  const normalised = hex.replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(normalised)) return hex;
+  const value = Number.parseInt(normalised, 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
 interface LegendValues {
   candle: Candle | null;
   changePercent: number | null;
@@ -212,18 +245,20 @@ export function AnalysisChart({
   const trendSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const overlaySeriesRef = useRef(new Map<string, ISeriesApi<'Line'>>());
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const levelLinesRef = useRef<IPriceLine[]>([]);
   const drawingLinesRef = useRef<IPriceLine[]>([]);
   const drawingSeriesRef = useRef<ISeriesApi<'Line'>[]>([]);
   /** The live "now" price line, whose label carries the candle close time. */
   const livePriceLineRef = useRef<IPriceLine | null>(null);
   const lastFittedRef = useRef<string | null>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const zoneBoxesRef = useRef<ZoneBox[]>([]);
 
   const [layers, setLayers] = useState<ChartLayers>(DEFAULT_CHART_LAYERS);
   const [tool, setTool] = useState<DrawingTool>('none');
   const [pendingTrend, setPendingTrend] = useState<ChartPoint | null>(null);
   const [drawings, setDrawings] = useState<ChartDrawing[]>([]);
   const [legend, setLegend] = useState<LegendValues | null>(null);
+  const [hoveredZone, setHoveredZone] = useState<PriceZone | null>(null);
 
   const hasVolumeData = useMemo(() => hasVolume(chart.candles), [chart.candles]);
   const hasRsi = chart.indicators.rsi !== null && chart.indicators.rsi.points.length > 0;
@@ -257,6 +292,7 @@ export function AnalysisChart({
     pendingTrend,
     palette,
     format,
+    hoveredZone,
     commitDrawing: (drawing: ChartDrawing) => persist([...drawings, drawing]),
     setPendingTrend,
   });
@@ -268,6 +304,7 @@ export function AnalysisChart({
     pendingTrend,
     palette,
     format,
+    hoveredZone,
     commitDrawing: (drawing: ChartDrawing) => persist([...drawings, drawing]),
     setPendingTrend,
   };
@@ -321,32 +358,184 @@ export function AnalysisChart({
     }
   }, []);
 
-  const syncLevels = useCallback(() => {
+  /**
+   * Draw zones, trend lines and conditional projections on a canvas anchored to
+   * the chart's own time/price scales.
+   *
+   * This is deliberately not a set of screen-space rectangles: every box is
+   * recomputed from `timeToCoordinate` and `priceToCoordinate` whenever the
+   * visible range, zoom, resize or theme changes. That is what keeps a zone on
+   * the dates and prices it was detected from.
+   */
+  const drawOverlay = useCallback(() => {
+    const chartApi = chartRef.current;
     const candleSeries = candleSeriesRef.current;
-    if (!candleSeries) return;
-    const { chart: payload, layers: activeLayers, palette: colors, format: fmt } = contextRef.current;
+    const container = containerRef.current;
+    const canvas = overlayCanvasRef.current;
+    if (!chartApi || !candleSeries || !container || !canvas) return;
 
-    for (const line of levelLinesRef.current) candleSeries.removePriceLine(line);
-    levelLinesRef.current = [];
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, container.clientWidth);
+    const height = Math.max(1, container.clientHeight);
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+    }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, width, height);
+    zoneBoxesRef.current = [];
 
-    if (!activeLayers.levels) return;
+    const { chart: payload, layers: active, palette: colors, format: fmt, hoveredZone: hovered } = contextRef.current;
+    const timeScale = chartApi.timeScale();
+    const visibleLogical = timeScale.getVisibleLogicalRange();
+    const barSpacing =
+      visibleLogical && visibleLogical.to > visibleLogical.from
+        ? timeScale.width() / (visibleLogical.to - visibleLogical.from)
+        : 8;
+    const toX = (time: number): number | null =>
+      timeScale.timeToCoordinate(toChartTime(time) as Time);
+    const toY = (price: number): number | null => candleSeries.priceToCoordinate(price);
+    const lastCandle = payload.candles[payload.candles.length - 1] ?? null;
+    const lastTime = lastCandle?.time ?? 0;
+    const lastX = toX(lastTime) ?? width - 8;
 
-    for (const level of buildLevelLines(payload)) {
-      const support = level.kind === 'support';
-      levelLinesRef.current.push(
-        candleSeries.createPriceLine({
-          price: level.price,
-          color: support ? colors.bull : colors.bear,
-          lineWidth: 1,
-          lineStyle: LineStyle.SparseDotted,
-          // Only the nearest level on each side gets an axis label; ten axis
-          // labels would drown out the price scale itself.
-          axisLabelVisible: level.nearest,
-          title: `${support ? 'حمایت' : 'مقاومت'} ${fmt.number(level.price, {
-            precision: pricePrecision(level.price),
-          })} · ${fmt.integer(level.touches)} برخورد`,
-        }),
-      );
+    /* ---------------------------- zones ---------------------------- */
+    const zones = visibleZones(payload, active.supportZones, active.resistanceZones).sort((a, b) => {
+      const rank = (zone: PriceZone): number =>
+        zone.status === 'broken' ? 0 : zone.status === 'provisional' ? 1 : 2;
+      return rank(a) - rank(b) || a.strength - b.strength;
+    });
+    const labelBoxes: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+    for (const zone of zones) {
+      const left = toX(zone.firstTouchTime);
+      const right = zone.status === 'active' ? lastX + barSpacing * 0.6 : toX(zone.lastTouchTime);
+      const x1 = Math.max(0, left ?? 0);
+      const x2 = Math.min(width, Math.max(x1 + 2, right ?? x1 + 2));
+      const yHigh = toY(zone.zoneHigh);
+      const yLow = toY(zone.zoneLow);
+      if (yHigh === null || yLow === null) continue;
+      const y1 = Math.min(yHigh, yLow);
+      const y2 = Math.max(yHigh, yLow);
+      if (y2 < 0 || y1 > height) continue;
+
+      const base = zone.role === 'support' ? colors.bull : zone.role === 'resistance' ? colors.bear : colors.info;
+      const color = zone.status === 'broken' ? colors.text : base;
+      const isHovered = hovered?.id === zone.id;
+      context.save();
+      context.fillStyle = withAlpha(color, isHovered ? 0.2 : zone.status === 'broken' ? 0.04 : 0.09);
+      context.fillRect(x1, y1, x2 - x1, y2 - y1);
+      context.strokeStyle = withAlpha(color, zone.status === 'active' ? 0.85 : 0.5);
+      context.lineWidth = isHovered ? 1.6 : 1;
+      context.setLineDash(zone.status === 'provisional' ? [4, 3] : zone.status === 'broken' ? [2, 4] : []);
+      context.beginPath();
+      context.moveTo(x1, y1);
+      context.lineTo(x2, y1);
+      context.moveTo(x1, y2);
+      context.lineTo(x2, y2);
+      context.moveTo(x1, y1);
+      context.lineTo(x1, y2);
+      context.stroke();
+      context.restore();
+
+      zoneBoxesRef.current.push({ zone, x1, x2, y1, y2 });
+
+      if (active.zoneLabels && width > 420) {
+        const roleLabel = zone.role === 'support' ? 'حمایت' : zone.role === 'resistance' ? 'مقاومت' : 'ناحیه دوطرفه';
+        const text = `${roleLabel} ${fmt.number(zone.zoneLow, { precision: pricePrecision(zone.zoneLow) })}–${fmt.number(zone.zoneHigh, { precision: pricePrecision(zone.zoneHigh) })}`;
+        context.font = '10px Vazirmatn, Tahoma, sans-serif';
+        const textWidth = Math.ceil(context.measureText(text).width) + 8;
+        const lx = Math.max(2, Math.min(width - textWidth - 3, x2 - textWidth - 3));
+        const ly = Math.max(0, Math.min(height - 15, y1 + 2));
+        const collision = labelBoxes.some(
+          (box) => lx < box.x + box.w && lx + textWidth > box.x && ly < box.y + box.h && ly + 14 > box.y,
+        );
+        if (!collision) {
+          labelBoxes.push({ x: lx, y: ly, w: textWidth, h: 14 });
+          context.fillStyle = withAlpha(colors.background, 0.82);
+          context.fillRect(lx, ly, textWidth, 14);
+          context.fillStyle = color;
+          context.textAlign = 'left';
+          context.textBaseline = 'middle';
+          context.fillText(text, lx + 4, ly + 7);
+        }
+      }
+    }
+
+    /* ------------------------- trend lines ------------------------- */
+    if (active.trendlines) {
+      for (const line of buildTrendLinePaths(payload.trendlines)) {
+        const points = line.points
+          .map((point) => ({ x: toX(point.time), y: toY(point.value) }))
+          .filter((point): point is { x: number; y: number } => point.x !== null && point.y !== null);
+        if (points.length < 2) continue;
+        context.save();
+        context.strokeStyle = withAlpha(
+          line.kind === 'rising_support' ? colors.bull : colors.bear,
+          line.status === 'broken' ? 0.28 : line.status === 'provisional' ? 0.55 : 0.85,
+        );
+        context.lineWidth = 1.2;
+        context.setLineDash(line.status === 'active' ? [] : [5, 4]);
+        context.beginPath();
+        context.moveTo(points[0]!.x, points[0]!.y);
+        for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+        context.stroke();
+        context.restore();
+      }
+    }
+
+    /* ------------------------ projections ------------------------- */
+    if (active.projection && payload.projection && lastCandle) {
+      const projection = payload.projection;
+      const span = Math.max(1, projection.horizonEndsAt - projection.referenceTime);
+      const projectX = (time: number): number => lastX + ((time - lastTime) / span) * barSpacing * projection.horizonBars;
+      const scenarioColor = (id: string): string =>
+        id === 'bullish' ? colors.bull : id === 'bearish' ? colors.bear : colors.info;
+
+      for (const scenario of buildProjectionPaths(payload)) {
+        const color = scenarioColor(scenario.id);
+        context.save();
+        // Uncertainty band: a soft fill, never a guarantee.
+        const highs = scenario.bandHigh.map((point) => ({ x: projectX(point.time), y: toY(point.value) }));
+        const lows = scenario.bandLow.map((point) => ({ x: projectX(point.time), y: toY(point.value) }));
+        if (highs.every((point) => point.y !== null) && lows.every((point) => point.y !== null)) {
+          context.beginPath();
+          context.moveTo(highs[0]!.x, highs[0]!.y as number);
+          for (const point of highs.slice(1)) context.lineTo(point.x, point.y as number);
+          for (const point of [...lows].reverse()) context.lineTo(point.x, point.y as number);
+          context.closePath();
+          context.fillStyle = withAlpha(color, scenario.id === 'base' ? 0.03 : 0.05);
+          context.fill();
+        }
+
+        const path = scenario.points
+          .map((point) => ({ x: projectX(point.time), y: toY(point.value) }))
+          .filter((point): point is { x: number; y: number } => point.y !== null);
+        if (path.length >= 2) {
+          context.strokeStyle = withAlpha(color, 0.8);
+          context.lineWidth = 1.4;
+          context.setLineDash([5, 4]);
+          context.beginPath();
+          context.moveTo(path[0]!.x, path[0]!.y);
+          for (const point of path.slice(1)) context.lineTo(point.x, point.y);
+          context.stroke();
+        }
+        context.restore();
+      }
+
+      const referenceY = toY(projection.referencePrice);
+      if (referenceY !== null) {
+        context.save();
+        context.strokeStyle = withAlpha(colors.accent, 0.55);
+        context.setLineDash([3, 4]);
+        context.beginPath();
+        context.moveTo(Math.max(0, lastX - barSpacing), referenceY);
+        context.lineTo(Math.min(width, lastX + barSpacing * 2), referenceY);
+        context.stroke();
+        context.restore();
+      }
     }
   }, []);
 
@@ -428,30 +617,25 @@ export function AnalysisChart({
 
     const trendSeries = trendSeriesRef.current;
     if (trendSeries) {
-      const points = activeLayers.trend ? buildTrendLine(payload) : [];
-      trendSeries.applyOptions({ visible: activeLayers.trend });
+      // The fitted regression is supporting evidence for the text report; the
+      // structural lines themselves are drawn by the overlay below.
+      const points = activeLayers.trendlines ? buildTrendLine(payload) : [];
+      trendSeries.applyOptions({ visible: activeLayers.trendlines });
       trendSeries.setData(points);
     }
 
     syncOverlays();
 
+    // Touch-point dots were removed deliberately: a zone is a region, and a
+    // second marker layer only added clutter. Only swing pivots remain.
     markersRef.current?.setMarkers(
-      [
-        ...(activeLayers.swings ? buildSwingMarkers(payload, { bull: colors.bull, bear: colors.bear }) : []),
-        ...(activeLayers.touchpoints && payload.levels ? [...payload.levels.supports, ...payload.levels.resistances].flatMap((level) =>
-          (level.touchpoints ?? []).map((touch) => ({
-            time: toChartTime(touch.time),
-            position: touch.type === 'support' ? 'belowBar' as const : 'aboveBar' as const,
-            color: touch.type === 'support' ? colors.bull : colors.bear,
-            shape: 'circle' as const,
-            text: `برخورد ${touch.strength}/5`,
-          })),
-        ) : []),
-      ].sort((a, b) => Number(a.time) - Number(b.time)),
+      (activeLayers.swings ? buildSwingMarkers(payload, { bull: colors.bull, bear: colors.bear }) : []).sort(
+        (a, b) => Number(a.time) - Number(b.time),
+      ),
     );
 
-    syncLevels();
     syncDrawings();
+    drawOverlay();
 
     // Fit only when a different dataset arrives: refitting on every layer toggle
     // would discard the user's zoom.
@@ -459,8 +643,10 @@ export function AnalysisChart({
     if (lastFittedRef.current !== fitKey) {
       lastFittedRef.current = fitKey;
       chartApi.timeScale().fitContent();
+      // fitContent changes the visible range; draw once after it settles.
+      requestAnimationFrame(drawOverlay);
     }
-  }, [syncDrawings, syncLevels, syncOverlays]);
+  }, [syncDrawings, syncOverlays, drawOverlay]);
 
   /* ---------------------------------------------------------------- *
    * Chart lifecycle — rebuilt only when its panes or the theme change
@@ -690,12 +876,15 @@ export function AnalysisChart({
 
     chartApi.subscribeCrosshairMove(onCrosshairMove);
     chartApi.subscribeClick(onClick);
+    const onVisibleRangeChange = (): void => drawOverlay();
+    chartApi.timeScale().subscribeVisibleLogicalRangeChange(onVisibleRangeChange);
 
     applyAll();
 
     return () => {
       chartApi.unsubscribeCrosshairMove(onCrosshairMove);
       chartApi.unsubscribeClick(onClick);
+      chartApi.timeScale().unsubscribeVisibleLogicalRangeChange(onVisibleRangeChange);
       chartApi.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
@@ -705,14 +894,29 @@ export function AnalysisChart({
       trendSeriesRef.current = null;
       overlaySeriesRef.current.clear();
       markersRef.current = null;
-      levelLinesRef.current = [];
       drawingLinesRef.current = [];
       drawingSeriesRef.current = [];
       livePriceLineRef.current = null;
       lastFittedRef.current = null;
       setLegend(null);
     };
-  }, [paneKey, settings.theme, applyAll, formatPrice, showMacdPane, showRsiPane, showVolumePane, height]);
+  }, [paneKey, settings.theme, applyAll, drawOverlay, formatPrice, showMacdPane, showRsiPane, showVolumePane, height]);
+
+  // The canvas overlay is sized in device pixels so text and 1px borders stay
+  // crisp after a resize, a panel toggle or a devicePixelRatio change.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const observer = new ResizeObserver(() => drawOverlay());
+    observer.observe(container);
+    drawOverlay();
+    return () => observer.disconnect();
+  }, [drawOverlay, paneKey, height]);
+
+  // Highlights are a cheap redraw of the overlay only, never a chart rebuild.
+  useEffect(() => {
+    drawOverlay();
+  }, [drawOverlay, hoveredZone]);
 
   // Localisation is a cheap `applyOptions`: switching between Persian and Latin
   // numerals must not rebuild the chart.
@@ -784,7 +988,11 @@ export function AnalysisChart({
         title,
       });
     }
-  }, [live, palette.accent, palette.volume.down, palette.volume.up, format.style]);
+
+    // The overlay is anchored to the chart's scales, so it must redraw after a
+    // forming bar moves the price scale.
+    drawOverlay();
+  }, [live, palette.accent, palette.volume.down, palette.volume.up, format.style, drawOverlay]);
 
   // Magnet snapping fights precise line drawing, so relax it while a tool is
   // active and restore it for normal reading.
@@ -794,12 +1002,27 @@ export function AnalysisChart({
     });
   }, [tool]);
 
+  const handleZoneHover = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const box = zoneBoxesRef.current.find(
+      (candidate) => x >= candidate.x1 && x <= candidate.x2 && y >= candidate.y1 && y <= candidate.y2,
+    );
+    setHoveredZone((previous) => (previous?.id === box?.zone.id ? previous : box?.zone ?? null));
+  }, []);
+
   const lastCandle = chart.candles[chart.candles.length - 1] ?? null;
   // Prefer the live forming bar: it is the same bar, one second fresher.
   const displayedCandle = legend?.candle ?? live?.snapshot?.candle ?? lastCandle;
   const change = legend ? legend.changePercent : windowChangePercent(chart.candles);
-  const nearestSupport = chart.levels?.nearestSupport ?? null;
-  const nearestResistance = chart.levels?.nearestResistance ?? null;
+  // Zones are the primary model; the legacy single-level fields are only used
+  // as a fallback for old saved chart payloads.
+  const nearestSupport = chart.zones?.nearestSupport ?? null;
+  const nearestResistance = chart.zones?.nearestResistance ?? null;
+  const hasZones = (chart.zones?.zones.length ?? 0) > 0;
+  const hasTrendlines = (chart.trendlines?.length ?? 0) > 0;
+  const hasProjection = chart.projection !== null;
 
   return (
     <div className={cn('w-full', className)}>
@@ -818,14 +1041,30 @@ export function AnalysisChart({
             onClick={() => setLayers((current) => ({ ...current, sma: !current.sma }))}
           />
           <LayerToggle
-            label="سطوح"
-            active={layers.levels}
-            onClick={() => setLayers((current) => ({ ...current, levels: !current.levels }))}
+            label="نواحی حمایت"
+            active={layers.supportZones}
+            disabled={!hasZones}
+            disabledHint="ناحیه قیمتی معتبری شناسایی نشد."
+            onClick={() => setLayers((current) => ({ ...current, supportZones: !current.supportZones }))}
           />
           <LayerToggle
-            label="نقاط برخورد"
-            active={layers.touchpoints}
-            onClick={() => setLayers((current) => ({ ...current, touchpoints: !current.touchpoints }))}
+            label="نواحی مقاومت"
+            active={layers.resistanceZones}
+            disabled={!hasZones}
+            disabledHint="ناحیه قیمتی معتبری شناسایی نشد."
+            onClick={() => setLayers((current) => ({ ...current, resistanceZones: !current.resistanceZones }))}
+          />
+          <LayerToggle
+            label="برچسب نواحی"
+            active={layers.zoneLabels}
+            disabled={!hasZones}
+            onClick={() => setLayers((current) => ({ ...current, zoneLabels: !current.zoneLabels }))}
+          />
+          <LayerToggle
+            label="خطوط روند"
+            active={layers.trendlines}
+            disabled={!hasTrendlines}
+            onClick={() => setLayers((current) => ({ ...current, trendlines: !current.trendlines }))}
           />
           <LayerToggle
             label="نقاط چرخش"
@@ -833,9 +1072,11 @@ export function AnalysisChart({
             onClick={() => setLayers((current) => ({ ...current, swings: !current.swings }))}
           />
           <LayerToggle
-            label="خط روند"
-            active={layers.trend}
-            onClick={() => setLayers((current) => ({ ...current, trend: !current.trend }))}
+            label="پیش‌بینی شرطی"
+            active={layers.projection}
+            disabled={!hasProjection}
+            disabledHint="برای این نماد/تایم‌فریم پیش‌بینی شرطی ساخته نشد."
+            onClick={() => setLayers((current) => ({ ...current, projection: !current.projection }))}
           />
 
           <span className="mx-1 hidden h-4 w-px bg-border sm:block" />
@@ -932,6 +1173,41 @@ export function AnalysisChart({
             <span className="num">
               {describeLiveCandle(live.snapshot, live.secondsToClose, format.style)}
             </span>
+            {/* Transport is shown, not hidden: a REST fallback is a real
+                degradation and must look different from a live socket. The
+                label follows the *connection*, not just the transport: a
+                socket tick held after the socket dropped is not live. */}
+            <span
+              className={cn(
+                'rounded border px-1 py-0.5 text-2xs',
+                live.snapshot.freshness.transport === 'websocket' &&
+                  live.snapshot.freshness.connection === 'connected'
+                  ? 'border-bull/30 text-bull'
+                  : 'border-warn/40 text-warn',
+              )}
+              title={
+                live.snapshot.freshness.transport !== 'websocket'
+                  ? 'این نماد جریان وب‌سوکت ندارد؛ قیمت با نظرسنجی REST به‌روز می‌شود.'
+                  : live.snapshot.freshness.connection === 'connected'
+                    ? 'جریان وب‌سوکت صرافی متصل است.'
+                    : live.snapshot.freshness.connection === 'connecting'
+                      ? 'در حال اتصال به وب‌سوکت صرافی؛ مقدار نمایش‌داده‌شده از REST است.'
+                      : `وب‌سوکت صرافی قطع است${live.snapshot.freshness.lastError ? ` (${live.snapshot.freshness.lastError})` : ''}؛ آخرین مقدار معلوم نمایش داده می‌شود.`
+              }
+            >
+              {live.snapshot.freshness.transport !== 'websocket'
+                ? 'REST'
+                : live.snapshot.freshness.connection === 'connected'
+                  ? 'وب‌سوکت'
+                  : live.snapshot.freshness.connection === 'connecting'
+                    ? 'اتصال…'
+                    : 'وب‌سوکت/قطع'}
+            </span>
+          </span>
+        ) : null}
+        {live?.stale && live.reason ? (
+          <span className="text-warn" title={live.reason}>
+            {live.reason}
           </span>
         ) : null}
         {change !== null ? (
@@ -987,8 +1263,63 @@ export function AnalysisChart({
         </div>
       ) : null}
 
-      <div className="relative">
+      <div className="relative" onMouseMove={handleZoneHover} onMouseLeave={() => setHoveredZone(null)}>
         <div ref={containerRef} style={{ height }} className="w-full" />
+        <canvas
+          ref={overlayCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 h-full w-full"
+        />
+
+        {hoveredZone ? (
+          <div className="pointer-events-none absolute end-2 top-2 z-10 w-64 max-w-[75%] rounded-lg border border-border bg-base-900/95 px-3 py-2 text-2xs shadow-lg backdrop-blur">
+            <div className="flex items-center justify-between gap-2">
+              <span
+                className={cn(
+                  'font-medium',
+                  hoveredZone.role === 'support'
+                    ? 'text-bull'
+                    : hoveredZone.role === 'resistance'
+                      ? 'text-bear'
+                      : 'text-accent',
+                )}
+              >
+                {hoveredZone.role === 'support'
+                  ? 'ناحیه حمایت'
+                  : hoveredZone.role === 'resistance'
+                    ? 'ناحیه مقاومت'
+                    : 'ناحیه دوطرفه'}
+              </span>
+              <span className="text-ink-subtle">
+                {hoveredZone.status === 'active'
+                  ? 'فعال'
+                  : hoveredZone.status === 'provisional'
+                    ? 'آزمایشی'
+                    : 'شکسته'}
+              </span>
+            </div>
+            <p className="num mt-1 text-ink">
+              {format.number(hoveredZone.zoneLow)} – {format.number(hoveredZone.zoneHigh)}
+            </p>
+            <p className="num mt-0.5 text-ink-subtle">
+              پهنا {format.percent(hoveredZone.widthPercent)} · فاصله {format.percent(hoveredZone.distancePercent)}
+            </p>
+            <p className="num mt-0.5 text-ink-subtle">
+              {format.integer(hoveredZone.reactionCount)} واکنش · شواهد {format.number(hoveredZone.strength, { precision: 1 })}/۱۰۰
+            </p>
+            {hoveredZone.confluence.length > 0 ? (
+              <p className="mt-1 text-2xs text-accent">
+                هم‌پوشانی با {[...new Set(hoveredZone.confluence.map((item) => item.timeframe))].join('، ')}
+              </p>
+            ) : null}
+            {hoveredZone.evidence[0] ? (
+              <p className="mt-1 line-clamp-2 leading-5 text-ink-muted">{hoveredZone.evidence[0]}</p>
+            ) : null}
+            <p className="mt-1 text-2xs text-ink-subtle">
+              امتیاز شواهد، احتمال وقوع نیست.
+            </p>
+          </div>
+        ) : null}
 
         {chart.candles.length === 0 ? (
           <div className="absolute inset-0 grid place-items-center text-xs text-ink-muted">
@@ -1024,13 +1355,18 @@ export function AnalysisChart({
         </span>
         {nearestSupport ? (
           <span>
-            نزدیک‌ترین حمایت: <span className="num text-bull">{format.number(nearestSupport.price)}</span>
+            نزدیک‌ترین ناحیه حمایت:{' '}
+            <span className="num text-bull">
+              {format.number(nearestSupport.zoneLow)}–{format.number(nearestSupport.zoneHigh)}
+            </span>
           </span>
         ) : null}
         {nearestResistance ? (
           <span>
-            نزدیک‌ترین مقاومت:{' '}
-            <span className="num text-bear">{format.number(nearestResistance.price)}</span>
+            نزدیک‌ترین ناحیه مقاومت:{' '}
+            <span className="num text-bear">
+              {format.number(nearestResistance.zoneLow)}–{format.number(nearestResistance.zoneHigh)}
+            </span>
           </span>
         ) : null}
       </div>

@@ -77,6 +77,10 @@ function payload(overrides: Partial<ChartPayload> = {}): ChartPayload {
       nearestSupport: level(98, { distancePercent: -2 }),
       nearestResistance: level(102, { distancePercent: 2 }),
     },
+    zones: null,
+    structure: null,
+    trendlines: [],
+    projection: null,
     swings: {
       highs: [{ time: T0 + 3_600_000, value: 103 }],
       lows: [{ time: T0, value: 99 }],

@@ -41,6 +41,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     log.info('Shutting down', { signal });
+    container.marketData.dispose();
     server.close(() => {
       void container.storage.close().finally(() => process.exit(0));
     });

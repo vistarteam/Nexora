@@ -40,7 +40,10 @@ const envSchema = z.object({
   // Optional origin overrides for the Iran-reachable providers (e.g. point
   // Nobitex at `https://apiv2.nobitex.ir`). Empty means use the built-in default.
   MARKET_DATA_NOBITEX_BASE_URL: z.string().optional().default(''),
+  MARKET_DATA_NOBITEX_WS_URL: z.string().optional().default('wss://ws.nobitex.ir/connection/websocket'),
   MARKET_DATA_YAHOO_BASE_URL: z.string().optional().default(''),
+  MARKET_DATA_BINANCE_WS_URL: z.string().optional().default('wss://stream.binance.com:9443/ws'),
+  MARKET_DATA_STREAM_ENABLED: booleanish.default('true'),
   MARKET_DATA_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(8000),
   MARKET_DATA_MAX_LIMIT: z.coerce.number().int().positive().max(5_000).default(1000),
 
@@ -77,7 +80,10 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       apiKey: env.MARKET_DATA_API_KEY,
       baseUrl: env.MARKET_DATA_BASE_URL,
       nobitexBaseUrl: env.MARKET_DATA_NOBITEX_BASE_URL,
+      nobitexWsUrl: env.MARKET_DATA_NOBITEX_WS_URL,
       yahooBaseUrl: env.MARKET_DATA_YAHOO_BASE_URL,
+      binanceWsUrl: env.MARKET_DATA_BINANCE_WS_URL,
+      streamEnabled: env.MARKET_DATA_STREAM_ENABLED,
       timeoutMs: env.MARKET_DATA_TIMEOUT_MS,
       maxLimit: env.MARKET_DATA_MAX_LIMIT,
     },

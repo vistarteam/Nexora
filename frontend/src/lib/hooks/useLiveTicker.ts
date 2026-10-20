@@ -24,8 +24,15 @@ export interface LiveTickerState {
   /** Seconds until the forming candle closes, recomputed every second. */
   secondsToClose: number | null;
   error: ApiError | null;
-  /** The last poll failed but a previous value is still displayed. */
+  /**
+   * The displayed value is no longer fresh. This covers both a failed poll and
+   * a snapshot whose own freshness metadata has aged past its threshold; a
+   * quiet market is not called stale merely because no trade occurred, because
+   * the backend measures feed health, not trade frequency.
+   */
   stale: boolean;
+  /** Short user-facing explanation while stale, otherwise `null`. */
+  reason: string | null;
 }
 
 export interface LiveTickerInput {
@@ -40,7 +47,13 @@ export interface LiveTickerOptions {
   intervalMs?: number;
 }
 
-const IDLE: LiveTickerState = { snapshot: null, secondsToClose: null, error: null, stale: false };
+const IDLE: LiveTickerState = {
+  snapshot: null,
+  secondsToClose: null,
+  error: null,
+  stale: false,
+  reason: null,
+};
 
 export function useLiveTicker(
   input: LiveTickerInput,
@@ -106,11 +119,27 @@ export function useLiveTicker(
     return Math.round((closeTime - now) / 1_000);
   }, [snapshot?.candleCloseTime, now]);
 
+  const stale = useMemo(() => {
+    if (!snapshot) return false;
+    if (error !== null) return true;
+    const threshold = snapshot.freshness?.staleAfterMs ?? 6_000;
+    const receivedAt = snapshot.freshness?.receivedAt ?? new Date(snapshot.fetchedAt).getTime();
+    return now - receivedAt > threshold;
+  }, [snapshot, error, now]);
+
+  // The reason is derived here rather than at each call site so every surface
+  // describes the same failure the same way.
+  const reason = useMemo(() => {
+    if (error !== null) return error.message;
+    if (stale) return 'داده زنده کهنه است؛ آخرین قیمت دریافتی نمایش داده می‌شود.';
+    return null;
+  }, [error, stale]);
+
   return useMemo(
     () =>
       snapshot === null && error === null
         ? IDLE
-        : { snapshot, secondsToClose, error, stale: error !== null && snapshot !== null },
-    [snapshot, secondsToClose, error],
+        : { snapshot, secondsToClose, error, stale, reason },
+    [snapshot, secondsToClose, error, stale, reason],
   );
 }

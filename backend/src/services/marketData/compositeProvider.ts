@@ -1,6 +1,11 @@
 import type { AssetClass, CandleSeries, DataMode } from '../../types/domain.js';
 import { createLogger } from '../../lib/logger.js';
-import { MarketDataError, type CandleRequest, type MarketDataProvider } from './types.js';
+import {
+  MarketDataError,
+  type CandleRequest,
+  type MarketDataProvider,
+  type TickerStreamHandlers,
+} from './types.js';
 
 const log = createLogger('market-data:composite');
 
@@ -68,6 +73,19 @@ export class CompositeMarketDataProvider implements MarketDataProvider {
       provider: provider.id,
     });
     return provider.fetchCandles(request);
+  }
+
+  /** Route a stream subscription to the same provider that serves candles. */
+  subscribeTicker(
+    request: Omit<CandleRequest, 'limit'>,
+    handlers: TickerStreamHandlers,
+  ): () => void {
+    const provider = this.pick(request.assetClass);
+    if (!provider.subscribeTicker) {
+      handlers.onStatus('disconnected', `provider "${provider.id}" has no public stream`);
+      return () => undefined;
+    }
+    return provider.subscribeTicker(request, handlers);
   }
 
   /**

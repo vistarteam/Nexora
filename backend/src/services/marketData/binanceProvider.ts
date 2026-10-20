@@ -7,7 +7,9 @@ import {
   sanitizeCandles,
   type CandleRequest,
   type MarketDataProvider,
+  type TickerStreamHandlers,
 } from './types.js';
+import { BinanceTickerStream } from './streams.js';
 
 const log = createLogger('market-data:binance');
 
@@ -45,6 +47,11 @@ export class BinanceMarketDataProvider implements MarketDataProvider {
   constructor(options: { baseUrl?: string } = {}) {
     this.baseUrl = (options.baseUrl || config.marketData.baseUrl || 'https://api.binance.com')
       .replace(/\/+$/, '');
+  }
+
+  /** Native ticker for the public REST and WebSocket endpoints. */
+  nativeTicker(symbol: string): string {
+    return this.toBinanceSymbol(symbol);
   }
 
   private toBinanceSymbol(symbol: string): string {
@@ -149,6 +156,31 @@ export class BinanceMarketDataProvider implements MarketDataProvider {
       lastCandleStatus: newestCandleStatus(newest, closeTimeByOpenTime),
       source: { provider: this.id, mode: 'live', fetchedAt: new Date().toISOString() },
     };
+  }
+
+  /** Public `<symbol>@kline_<interval>` stream; no key is required. */
+  subscribeTicker(
+    request: Omit<CandleRequest, 'limit'>,
+    handlers: TickerStreamHandlers,
+  ): () => void {
+    if (!config.marketData.streamEnabled) {
+      handlers.onStatus('disconnected', 'streams disabled by configuration');
+      return () => undefined;
+    }
+    let stream: BinanceTickerStream | null = null;
+    try {
+      stream = new BinanceTickerStream({
+        symbol: request.symbol,
+        timeframe: request.timeframe,
+        nativeTicker: this.toBinanceSymbol(request.symbol),
+        handlers,
+      });
+      stream.start();
+    } catch (error) {
+      handlers.onStatus('disconnected', (error as Error).message);
+      return () => undefined;
+    }
+    return () => stream?.close();
   }
 
   async health(): Promise<{ ok: boolean; detail?: string }> {

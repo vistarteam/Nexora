@@ -263,6 +263,7 @@ function composeReport(args: {
     facts: result.facts,
     interpretation: result.interpretation,
     scenarios: result.scenarios,
+    projection: result.projection ?? null,
     warnings: dedupe(combined),
     disclaimer: ANALYSIS_DISCLAIMER,
   };

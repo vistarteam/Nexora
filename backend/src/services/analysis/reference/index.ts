@@ -17,6 +17,8 @@ import type {
 } from '../../../types/domain.js';
 import { atr, ema, lastValue, macd, percentChange, rsi, sma, stdev } from './indicators.js';
 import { detectLevels, findSwings } from './levels.js';
+import { detectZones } from './zones.js';
+import { analyzeMarketStructure, buildProjection, detectTrendlines } from './structure.js';
 import { classifyTrend, regressionLine, type TrendReading } from './trend.js';
 import {
   DEFAULT_ENGINE_OPTIONS,
@@ -209,7 +211,7 @@ function maSnapshots(
   });
 }
 
-function buildFacts(candles: Candle[], options: EngineOptions): AnalysisFacts {
+function buildFacts(candles: Candle[], options: EngineOptions, timeframe: string): AnalysisFacts {
   const closes = candles.map((candle) => candle.close);
   const highs = candles.map((candle) => candle.high);
   const lows = candles.map((candle) => candle.low);
@@ -236,6 +238,9 @@ function buildFacts(candles: Candle[], options: EngineOptions): AnalysisFacts {
   const change = percentChange(closes[0] as number, closes[closes.length - 1] as number);
   const trend = classifyTrend(highs, lows, closes, options.swingLookback);
   const levels = detectLevels(highs, lows, closes, options.swingLookback, options.maxLevels, candles.map((candle) => candle.time));
+  const zones = detectZones(candles, timeframe, options.swingLookback, Math.max(4, options.maxLevels) + 1);
+  const structure = analyzeMarketStructure(candles, options.swingLookback);
+  const trendlines = detectTrendlines(candles, options.swingLookback);
 
   const round = (value: number, decimals: number): number =>
     Number(value.toFixed(decimals));
@@ -282,6 +287,9 @@ function buildFacts(candles: Candle[], options: EngineOptions): AnalysisFacts {
           nearestResistance: levels.nearestResistance,
         }
       : null,
+    zones,
+    structure,
+    trendlines,
   };
 }
 
@@ -527,6 +535,7 @@ export function analyzeCandles(
       facts: null,
       interpretation: null,
       scenarios: [],
+      projection: null,
       series: null,
       reason:
         `برای تحلیل حداقل ${MINIMUM_CANDLES} کندل معتبر لازم است اما فقط ` +
@@ -541,6 +550,7 @@ export function analyzeCandles(
       facts: null,
       interpretation: null,
       scenarios: [],
+      projection: null,
       series: null,
       reason:
         `این مجموعه اندیکاتورها به ${required} کندل نیاز دارد اما فقط ${candles.length} کندل دریافت شد. ` +
@@ -552,12 +562,20 @@ export function analyzeCandles(
   const highs = candles.map((candle) => candle.high);
   const lows = candles.map((candle) => candle.low);
   const trend: TrendReading = classifyTrend(highs, lows, closes, options.swingLookback);
-  const facts = buildFacts(candles, options);
+  const facts = buildFacts(candles, options, context.timeframe ?? '1h');
+  const projection = buildProjection(
+    candles,
+    context.timeframe ?? '1h',
+    facts.structure ?? null,
+    facts.zones ?? null,
+    facts.trendlines ?? [],
+  );
 
   return {
     ...base,
     status: 'ok',
     facts,
+    projection,
     interpretation: buildInterpretation(
       facts,
       context.symbol ?? 'unknown',
